@@ -6,14 +6,14 @@ Model行动的标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户�
 
 ## 安装与配置
 
-本版本先以 GitHub Release 的 npm tarball 分发；npm Registry 是否可用以仓库发布记录为准。
+从仓库运行 `npm run pack`，或在 GitHub Actions 下载构建产物。安装标准 npm 格式包，不需要发布到 Registry：
 
 ```sh
-npm install -g https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.1.0/model-action-mcp-0.1.0.tgz
+npm install -g ./dist/model-action-mcp-0.1.1.tgz
 model-action-mcp --help
 ```
 
-MCP 配置示例（全局安装后）：
+MCP 配置示例：
 
 ```json
 {
@@ -21,19 +21,6 @@ MCP 配置示例（全局安装后）：
     "model_action": {
       "command": "model-action-mcp",
       "args": ["--session", "my-agent"]
-    }
-  }
-}
-```
-
-也可以不安装，直接让宿主通过 npx 获取 Release 包：
-
-```json
-{
-  "mcpServers": {
-    "model_action": {
-      "command": "npx",
-      "args": ["--yes", "--package", "https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.1.0/model-action-mcp-0.1.0.tgz", "model-action-mcp", "--session", "my-agent"]
     }
   }
 }
