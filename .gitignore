@@ -6,4 +6,3 @@ dist/
 *.local.json
 coverage/
 evidence/
-packages/*/lib/

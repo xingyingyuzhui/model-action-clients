@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { installArenaHost, apply as officialApply, inject as nativeInject } from '../packages/dsh-model-action/host.js';
+import { installArenaHost, apply as officialApply, inject as nativeInject } from '../host.js';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
@@ -233,7 +233,7 @@ test('fatal runtime failure cannot continue merely because its last entry state 
 test('official native apply resolves undefined and loads/unloads through real Cordis effects', async t => {
   let Context;
   try {
-    const local = createRequire(new URL('../packages/dsh-model-action/host.js', import.meta.url));
+    const local = createRequire(new URL('../host.js', import.meta.url));
     const official = createRequire(local.resolve('@deepseek-ai/dsh-tools'));
     ({ Context } = await import(pathToFileURL(official.resolve('@deepseek-ai/cordis'))));
   } catch (e) {

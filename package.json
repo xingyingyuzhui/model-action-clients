@@ -1,14 +1,65 @@
 {
-  "name": "model-action-clients",
-  "version": "0.1.0",
-  "private": true,
+  "name": "dsh-model-action",
+  "version": "0.1.1",
+  "description": "Model行动 native DSH plugin: secure pairing, automatic entry and same-session gameplay loop.",
   "type": "module",
-  "workspaces": ["packages/*"],
-  "engines": {"node": ">=22"},
+  "main": "./host.js",
+  "exports": {
+    ".": "./host.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "model-action-install-dsh": "./bin/install-dsh.mjs"
+  },
+  "files": [
+    "host.js",
+    "lib/",
+    "bin/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xingyingyuzhui/model-action-clients.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xingyingyuzhui/model-action-clients/issues"
+  },
+  "homepage": "https://github.com/xingyingyuzhui/model-action-clients#readme",
+  "keywords": [
+    "model-action",
+    "deepseek-harness",
+    "dsh",
+    "mcp",
+    "game",
+    "agent"
+  ],
+  "license": "UNLICENSED",
+  "private": false,
+  "workspaces": [
+    "packages/model-action-mcp"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.mjs",
     "pack": "npm run build && node scripts/pack.mjs",
-    "check": "npm run build && npm test && npm run pack"
+    "check": "npm run build && npm test && npm run pack",
+    "build:check": "node scripts/build.mjs --check"
   }
 }

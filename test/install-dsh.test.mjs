@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-const installer=fileURLToPath(new URL('../packages/dsh-model-action/bin/install-dsh.mjs',import.meta.url));
+const installer=fileURLToPath(new URL('../bin/install-dsh.mjs',import.meta.url));
 test('installer refuses accidental legacy duplication and dry-run does not modify profile settings',t=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'model-action-install-test-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
   const dir=path.join(home,'profiles','desktop');fs.mkdirSync(dir,{recursive:true});

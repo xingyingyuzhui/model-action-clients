@@ -7,7 +7,7 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const output=path.join(root,'dist');fs.mkdirSync(output,{recursive:true});
 const results=[];
 for(const name of ['model-action-mcp','dsh-model-action']){
-  const cwd=path.join(root,'packages',name);
+  const cwd=name==='dsh-model-action'?root:path.join(root,'packages',name);
   const [packed]=JSON.parse(execFileSync('npm',['pack','--json','--ignore-scripts','--pack-destination',output],{cwd,encoding:'utf8'}));
   const file=path.join(output,packed.filename);
   if(packed.files.some(f=> /(?:^|\/)(?:node_modules|test|evidence|\.env|secrets\.local\.json)(?:\/|$)/.test(f.path)))throw new Error('Unexpected private/test material in '+name);
