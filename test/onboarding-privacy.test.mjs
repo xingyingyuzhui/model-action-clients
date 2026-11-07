@@ -12,6 +12,7 @@ test('public onboarding separates invite and pairing fields and formats the reco
 test('the session replay credential-file commands are denied while normal source inspection remains usable',()=>{
   for(const command of ['cd ~/.dsh; for f in plugins/dsh-aea/*/*.json; do head -c 800 "$f"; done','cat ~/.dsh/plugins/dsh-model-action/any/state.json','F=/Users/qin/.dsh/plugins/dsh-model-action/a/b.json; rm -f "$F"','cat ~/.model-action/mcp/a/b.json']) assert.ok(privateStateAccess({name:'bash',arguments:{command}},{home:'/Users/qin/.dsh'}),command);
   assert.equal(privateStateAccess({arguments:{command:'cat node_modules/dsh-model-action/host.js'}}),undefined);
+  assert.equal(privateStateAccess({arguments:{command:'cat node_modules/dsh-model-action/package.json'}}),undefined);
   assert.equal(privateStateAccess({arguments:{file_path:'/project/README.md'}}),undefined);
   assert.ok(privateStateAccess({arguments:{command:'find ~/.dsh/plugins -name "*.json" -exec jq -r .recovery_secret {} ;'}},{home:'/Users/qin/.dsh'}));
   assert.ok(privateStateAccess({arguments:{command:'cd ~/.dsh; find . -name "*.json" -exec cat {} ;'}},{home:'/Users/qin/.dsh'}));
