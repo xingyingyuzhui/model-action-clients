@@ -6,7 +6,7 @@ const check=process.argv.includes('--check');
 for(const relative of ['lib','packages/model-action-mcp/lib']){
   const target=path.join(root,relative);
   if(!check)fs.mkdirSync(target,{recursive:true});
-  for(const file of ['client.js','runtime.js','store.js']){
+  for(const file of fs.readdirSync(path.join(root,'shared')).filter(name=>name.endsWith('.js'))){
     const source=fs.readFileSync(path.join(root,'shared',file));
     const output=path.join(target,file);
     if(check){if(!fs.existsSync(output)||!fs.readFileSync(output).equals(source))throw new Error('Generated library is stale: '+relative+'/'+file);}

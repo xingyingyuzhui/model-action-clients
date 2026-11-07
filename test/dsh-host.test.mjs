@@ -6,14 +6,14 @@ import { pathToFileURL } from 'node:url';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(config = {}) {
-  const globals = new Map(), listeners = new Map(), roots = [], agents = new Map(), stores = [], runtimes = [];
+  const globals = new Map(), listeners = new Map(), roots = [], agents = new Map(), stores = [], runtimes = [], globalGuards = [];
   let nextMessage = 0;
   const register = map => definition => {
     assert.equal(map.has(definition.name), false, definition.name);
     map.set(definition.name, definition); return () => map.delete(definition.name);
   };
   const ctx = {
-    tools: { register: register(globals) },
+    tools: { register: register(globals), guard(fn) { globalGuards.push(fn); return () => { const index = globalGuards.indexOf(fn); if (index >= 0) globalGuards.splice(index, 1); }; } },
     agents: { get: id => agents.get(id), roots: () => [...roots] },
     on(name, fn) { const set = listeners.get(name) ?? new Set(); set.add(fn); listeners.set(name, set); return () => set.delete(fn); },
     effect() {},
@@ -44,6 +44,11 @@ function fixture(config = {}) {
     async stop(reason, options) {
       this.stops.push({ reason, options }); this.view.active = false; this.view.phase = 'stopped';
       return { stopped: true, character_state: this.view.entry_state === 'ended' || options.abandon ? 'ended' : this.view.entry_state === 'in_world' ? 'still_in_world' : 'not_in_world' };
+    }
+    async repairPairing() {
+      this.repairs = (this.repairs ?? 0) + 1;
+      this.view = { ...this.view, phase: 'pairing', active: false, entry_state: null, current_attempt: null, pairing: { user_code: 'FRESH-PAIR', expires_at_ms: Date.now() + 300000 }, loop: { state: 'stopped', reason: 'user_stop' } };
+      this.options.onState(this.state()); return this.state();
     }
     async terminal(result = { outcome: 'won' }) {
       this.view = { ...this.view, entry_state: 'ended', phase: 'ended', result };
@@ -79,7 +84,7 @@ function fixture(config = {}) {
     agents.set(id, agent); if (root) roots.push(agent); return agent;
   }
   const run = (name, args, agent, signal = agent.controller.signal) => globals.get(name).execute(args, { agent, signal, callId: 'native_call', rootCallId: 'native_call' });
-  return { ctx, host, globals, stores, runtimes, agent, run, emit };
+  return { ctx, host, globals, stores, runtimes, agent, run, emit, globalGuards };
 }
 
 test('native start rejects child agents, non-human/tool messages, unrelated human turns and secret arguments', async t => {
@@ -88,6 +93,9 @@ test('native start rejects child agents, non-human/tool messages, unrelated huma
   await assert.rejects(f.run('arena_start', {}, f.agent('injection', { source: 'plugin' })), { code: 'arena_human_authorization_required' });
   await assert.rejects(f.run('arena_start', {}, f.agent('weather', { text: '今天天气如何' })), { code: 'arena_human_authorization_required' });
   await assert.rejects(f.run('arena_start', { game_token: 'secret' }, f.agent('secret')), { code: 'arena_invalid_entry' });
+  for (const text of ['打开天气插件', '开启corn-cad插件', '开启这个插件', '启动 agent', '开始比赛', '打开房间']) {
+    await assert.rejects(f.run('arena_start', {}, f.agent('unrelated-' + text, { text })), { code: 'arena_human_authorization_required' });
+  }
   assert.equal(f.stores.length, 0);
 });
 
@@ -242,16 +250,18 @@ test('official native apply resolves undefined and loads/unloads through real Co
   }
   const ctx = new Context(), definitions = new Set();
   ctx.provide('agents', { get() {}, roots() { return []; } });
-  ctx.provide('tools', { register(definition) { definitions.add(definition.name); return () => definitions.delete(definition.name); } });
+  const globalGuards = new Set();
+  ctx.provide('tools', { register(definition) { definitions.add(definition.name); return () => definitions.delete(definition.name); }, guard(fn) { globalGuards.add(fn); return () => globalGuards.delete(fn); } });
   const fiber = ctx.plugin({ name: 'model-action-official-effect-contract-test', inject: nativeInject,
     async apply(inner) {
       const result = await officialApply(inner, { home: '/tmp/model-action-native-no-session-effect-test' });
       assert.equal(result, undefined);
     } });
   await fiber;
-  assert.deepEqual([...definitions], ['arena_start', 'arena_connect', 'arena_status', 'arena_stop']);
+  assert.deepEqual([...definitions], ['arena_start', 'arena_connect', 'arena_status', 'arena_repair_pairing', 'arena_stop']);
   await fiber.dispose();
   assert.equal(definitions.size, 0);
+  assert.equal(globalGuards.size, 0);
   await ctx.fiber.dispose();
 });
 
@@ -338,4 +348,98 @@ test('arena_stop during terminal closing cannot restore external tools before tu
   assert.ok(a.scopeState.guards[0]({ name: 'mcp__model_action__observe' }));
   await f.emit('session/event', a.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
   assert.equal(a.scopeState.restricted, false);
+});
+
+function nextHumanTurn(agent, text, source = 'user') {
+  const seq = agent.session.log.length + 20;
+  agent.session.log.push({ type: 'turn/start', seq, data: { turn: seq } },
+    { type: 'user/message', seq: seq + 1, data: { source: { kind: source }, content: [{ type: 'text', text }] } });
+}
+
+test('natural enable requests are accepted and negative enable/open requests are never authorization', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  for (const text of ['开启model行动插件', '打开 Model行动', 'enable Model Action plugin']) {
+    const a = f.agent('accepted-' + text, { text });
+    assert.equal((await f.run('arena_start', {}, a)).native_loop.armed, true);
+  }
+  for (const text of ['不要开启model行动插件', '别打开 Model行动', 'do not enable Model Action plugin', '停止启动 Model行动']) {
+    await assert.rejects(f.run('arena_start', {}, f.agent('refused-' + text, { text })), { code: 'arena_human_authorization_required' });
+  }
+});
+
+test('an idle status identifies the loaded Model行动 plugin without opening private identity files', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  const status = await f.run('arena_status', {}, f.agent('idle-status', { text: 'dsh-model-action' }));
+  assert.equal(status.plugin_loaded, true); assert.equal(status.plugin_name, 'dsh-model-action');
+  assert.equal(f.stores.length, 0);
+  for (const name of ['arena_start', 'arena_status', 'arena_repair_pairing']) assert.match(f.globals.get(name).description, /Model行动/);
+  assert.match(f.globals.get('arena_start').description, /配对码绝不是邀请码/);
+});
+
+test('invalid pairing feedback repairs a prior start after abort without restarting gameplay', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  const a = f.agent('pairing-feedback', { text: '开启model行动插件' });
+  await f.run('arena_start', {}, a);
+  await f.emit('session/event', a.session, { type: 'turn/end', data: { reason: { kind: 'aborted' } } });
+  assert.equal((await f.run('arena_status', {}, a)).native_loop.armed, false);
+  nextHumanTurn(a, '配对码无效');
+  const repaired = await f.run('arena_repair_pairing', {}, a);
+  assert.equal(repaired.pairing.user_code, 'FRESH-PAIR');
+  assert.equal(repaired.native_loop.armed, false); assert.equal(repaired.active, false);
+  assert.equal(f.runtimes[0].repairs, 1); assert.equal(f.runtimes.length, 1);
+  assert.equal(a.injections.length, 0); assert.equal(a.followups.length, 0);
+  await f.run('arena_repair_pairing', {}, a);
+  assert.equal(f.runtimes[0].repairs, 1, 'replaying the same human repair intent does not rotate another code');
+  await assert.rejects(f.run('arena_start', {}, a), { code: 'arena_human_authorization_required' });
+});
+
+test('repair requires a current human repair request and a prior start owned by this root agent', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  await assert.rejects(f.run('arena_repair_pairing', {}, f.agent('unstarted', { text: '配对码无效' })), { code: 'arena_pairing_repair_requires_prior_start' });
+  const a = f.agent('repair-authority'); await f.run('arena_start', {}, a);
+  nextHumanTurn(a, '配对码无效', 'plugin');
+  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_human_authorization_required' });
+  nextHumanTurn(a, '不要重新配对 Model行动');
+  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_authorization_required' });
+  nextHumanTurn(a, '今天天气如何');
+  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_authorization_required' });
+  await assert.rejects(f.run('arena_repair_pairing', {}, f.agent('repair-child', { root: false, text: '重新配对' })), { code: 'arena_root_agent_required' });
+});
+
+test('repair cannot replace an active/queued attempt, and explicit stop remains stopped after pairing repair', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  const a = f.agent('repair-in-world'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  nextHumanTurn(a, '刷新配对码');
+  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_unavailable' });
+  assert.equal(f.runtimes[0].repairs, undefined);
+  const b = f.agent('repair-after-explicit-stop'); await f.run('arena_start', {}, b); await f.run('arena_stop', {}, b);
+  nextHumanTurn(b, '重新配对');
+  const repaired = await f.run('arena_repair_pairing', {}, b);
+  assert.equal(repaired.active, false); assert.equal(repaired.native_loop.armed, false);
+  assert.equal(repaired.native_loop.stop_reason, 'user_stop');
+  assert.equal(b.scopeState.restricted, false); assert.equal(b.injections.length, 0);
+});
+
+test('concurrent repair calls share one flight and cannot race a new game start', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  const a = f.agent('repair-single-flight'); await f.run('arena_start', {}, a); nextHumanTurn(a, '重新配对 Model行动');
+  const runtime = f.runtimes[0], original = runtime.repairPairing.bind(runtime); let release;
+  runtime.repairPairing = async () => { await new Promise(resolve => { release = resolve; }); return original(); };
+  const first = f.run('arena_repair_pairing', {}, a); await flush();
+  const second = f.run('arena_repair_pairing', {}, a);
+  await assert.rejects(f.run('arena_start', {}, a), { code: 'arena_pairing_repair_in_progress' });
+  release(); await Promise.all([first, second]);
+  assert.equal(runtime.repairs, 1); assert.equal((await f.run('arena_status', {}, a)).native_loop.armed, false);
+});
+
+
+test('credential guards are installed before startup and removed when the host unloads', async () => {
+  const f = fixture();
+  assert.equal(f.globalGuards.length, 1);
+  const guard = f.globalGuards[0];
+  assert.match(guard({ name: 'bash', arguments: { command: 'cat ~/.dsh/plugins/dsh-aea/*/*.json' } }), /私有身份文件/);
+  assert.match(guard({ name: 'read_file', arguments: { path: '/tmp/model-action-native-host-fixture/plugins/dsh-model-action/id.json' } }), /私有身份文件/);
+  assert.equal(guard({ name: 'bash', arguments: { command: 'npm test' } }), undefined);
+  assert.equal(f.stores.length, 0);
+  await f.host.dispose(); assert.equal(f.globalGuards.length, 0);
 });

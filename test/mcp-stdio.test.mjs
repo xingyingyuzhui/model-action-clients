@@ -26,6 +26,7 @@ async function fixture(t) {
       res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ schema_version: 2, error: { code: 'unauthorized' } })); return;
     }
     switch (req.url) {
+      case '/client/v2/pair/replace':
       case '/client/v2/pair/init': pairCalls++; value = { pairing_id: 'pair_fixture', device_secret: secret, user_code: 'ABCDEFGHIJ', expires_at_ms: Date.now() + 60000, poll_interval_ms: 2000 }; break;
       case '/client/v2/pair/poll': value = !approved ? { state: 'pending' } : body.receipt ? { state: 'connected' } : { state: 'awaiting_receipt', control_token: 'control_' + secret, receipt: 'receipt_' + secret, receipt_expires_at_ms: Date.now() + 60000 }; break;
       case '/client/v2/session': case '/client/v2/heartbeat': value = session(); break;
@@ -70,7 +71,7 @@ test('official SDK stdio: pairing, dynamic game tools, authoritative terminal, n
   const { client, stderr } = await open(t, server.origin, directory);
   let notifications = 0; client.setNotificationHandler(ToolListChangedNotificationSchema, () => { notifications++; });
   assert.equal(client.getServerVersion().name, 'model-action');
-  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['arena_start', 'arena_connect', 'arena_status', 'arena_stop']);
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['arena_start', 'arena_connect', 'arena_status', 'arena_repair_pairing', 'arena_stop']);
   const invalid = await client.callTool({ name: 'arena_start', arguments: { mode_id: 'extraction', room_id: 'br-1' } });
   assert.equal(decode(invalid).error.code, 'invalid_client_input'); assert.equal(server.pairs(), 0);
   const before = await client.callTool({ name: 'game_observe_compact', arguments: {} });
@@ -101,7 +102,7 @@ test('official SDK stdio: pairing, dynamic game tools, authoritative terminal, n
   await client.callTool({ name: 'game_abandon', arguments: {} });
   const ended = decode(await client.callTool({ name: 'arena_status', arguments: {} }));
   assert.equal(ended.entry_state, 'ended'); assert.equal(ended.result.outcome, 'abandoned');
-  assert.equal((await client.listTools()).tools.length, 4);
+  assert.equal((await client.listTools()).tools.length, 5);
   const next = decode(await client.callTool({ name: 'arena_start', arguments: {} }));
   assert.equal(next.entry_state, 'in_world'); assert.notEqual(next.current_attempt.attempt_id, status.current_attempt.attempt_id);
   const stopped = decode(await client.callTool({ name: 'arena_stop', arguments: { abandon: true } }));
@@ -139,4 +140,23 @@ test('revoked control lease is kept until confirmed, then a new explicit start r
   assert.equal(retry.phase, 'pairing'); assert.equal(retry.entry_state, null); assert.equal(retry.pairing.user_code, 'ABCDEFGHIJ');
   assert.equal(server.pairs(), 2); assert.equal(JSON.parse(fs.readFileSync(file)).control, null);
   assert.ok(!JSON.stringify(retry).includes(secret));
+});
+
+
+test('stdio pairing repair replaces only pending onboarding and never silently enters a room', async t => {
+  const server=await fixture(t), directory=fs.mkdtempSync(path.join(os.tmpdir(),'model-action-repair-mcp-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const {client}=await open(t,server.origin,directory);
+  const initial=decode(await client.callTool({name:'arena_start',arguments:{}}));
+  assert.equal(initial.invite_and_pairing_are_different,true);
+  assert.ok(initial.instructions[0].includes('不是邀请码'));
+  const previous=server.pairs();
+  const repaired=decode(await client.callTool({name:'arena_repair_pairing',arguments:{}}));
+  assert.equal(server.pairs(),previous+1);assert.equal(repaired.active,false);assert.equal(repaired.repair.requires_explicit_start,true);
+  assert.ok(repaired.instructions[2].includes('不会自动重新游玩'));
+  assert.ok(!(await client.listTools()).tools.some(t=>t.name==='game_observe_compact'));
+  server.approve();
+  const stopped=decode(await client.callTool({name:'arena_status',arguments:{}}));assert.equal(stopped.active,false);
+  const entered=decode(await client.callTool({name:'arena_start',arguments:{}}));assert.equal(entered.entry_state,'in_world');
+  const denied=decode(await client.callTool({name:'arena_repair_pairing',arguments:{}}));assert.ok(denied.error);assert.equal(server.pairs(),previous+1);
 });
