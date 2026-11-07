@@ -1,0 +1,32 @@
+name: Publish npm packages
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing reviewed release tag, e.g. v0.1.0'
+        required: true
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    environment: npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm install --global npm@11.6.2
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/check-release.mjs
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm publish ./dist/model-action-mcp-*.tgz --access public
+      - run: npm publish ./dist/dsh-model-action-*.tgz --access public

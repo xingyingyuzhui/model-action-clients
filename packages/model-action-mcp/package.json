@@ -1,0 +1,17 @@
+{
+  "name": "model-action-mcp",
+  "version": "0.1.0",
+  "description": "Model行动 MCP stdio bridge with private device pairing and authoritative game tools.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "bin": { "model-action-mcp": "./bin/model-action-mcp.mjs" },
+  "exports": { ".": "./server.js", "./package.json": "./package.json" },
+  "files": ["bin/", "server.js", "lib/", "README.md"],
+  "repository": { "type": "git", "url": "git+https://github.com/xingyingyuzhui/model-action-clients.git", "directory": "packages/model-action-mcp" },
+  "homepage": "https://github.com/xingyingyuzhui/model-action-clients#readme",
+  "bugs": { "url": "https://github.com/xingyingyuzhui/model-action-clients/issues" },
+  "publishConfig": { "access": "public" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.2" },
+  "keywords": ["mcp", "model-action", "agent", "game", "deepseek"]
+}

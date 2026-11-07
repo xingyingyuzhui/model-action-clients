@@ -1,0 +1,6 @@
+# Native lifecycle only. Credentials are private runtime state, never config.
+- insert:
+    - id: model-action-native
+      name: dsh-model-action
+      config:
+        serverUrl: !!js process.env.MODEL_ACTION_SERVER_URL ?? 'https://xingying.dev'

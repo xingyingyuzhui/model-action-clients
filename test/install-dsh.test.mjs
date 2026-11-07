@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const installer=fileURLToPath(new URL('../packages/dsh-model-action/bin/install-dsh.mjs',import.meta.url));
+test('installer refuses accidental legacy duplication and dry-run does not modify profile settings',t=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'model-action-install-test-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const dir=path.join(home,'profiles','desktop');fs.mkdirSync(dir,{recursive:true});
+  const previous=JSON.stringify({dependencies:{['dsh-'+'aea']:'0.2.0',unrelated:'1.0.0'},dsh:{profile:{bundles:['unrelated','dsh-'+'aea']}},model:{provider:'unchanged'}});
+  fs.writeFileSync(path.join(dir,'package.json'),previous);
+  const call=args=>spawnSync(process.execPath,[installer,'--profile','desktop',...args],{env:{...process.env,DSH_HOME:home},encoding:'utf8'});
+  const denied=call(['--dry-run']);assert.notEqual(denied.status,0);assert.match(denied.stderr,/legacy_plugin_present/);
+  const plan=call(['--dry-run','--replace-legacy']);assert.equal(plan.status,0,plan.stderr);
+  assert.equal(JSON.parse(plan.stdout).changes_applied,false);
+  assert.equal(fs.readFileSync(path.join(dir,'package.json'),'utf8'),previous);
+  assert.ok(!fs.existsSync(path.join(dir,'.dsh-local-plugins')));
+});

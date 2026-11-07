@@ -1,0 +1,14 @@
+{
+  "name": "model-action-clients",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "pack": "npm run build && node scripts/pack.mjs",
+    "check": "npm run build && npm test && npm run pack"
+  }
+}
