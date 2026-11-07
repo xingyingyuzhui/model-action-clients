@@ -2,12 +2,13 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { ArenaClient } from './lib/client.js';
 import { ArenaRuntime } from './lib/runtime.js';
+import { onboardingView } from './lib/onboarding.js';
 import { AtomicStore } from './lib/store.js';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 
-export const VERSION = '0.1.1';
+export const VERSION = '0.1.2';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = cause => /^[a-z][a-z0-9_]{0,63}$/.test(cause?.code ?? '') ? cause.code : 'client_error';
@@ -20,9 +21,10 @@ const entrySchema = { type: 'object', additionalProperties: false, properties: {
   loadout_id: { type: 'string', enum: ['rifle', 'smg', 'shotgun', 'armored'] },
 } };
 const controls = [
-  { name: 'arena_start', description: '在用户明确要求开始 Model行动时调用。自动备赛与入场；首次返回公开配对码，请用户在游戏大厅批准。不要索取邀请码或令牌。', inputSchema: entrySchema },
+  { name: 'arena_start', description: '在用户明确要求开始 Model行动时调用。自动备赛与入场；首次返回公开配对码，请用户在游戏大厅批准。配对码不是邀请码：先用管理员邀请码进入备赛，再将配对码填入“插件显示的公开配对码”框审阅批准。不要读取、删除身份文件或索取令牌。', inputSchema: entrySchema },
   { name: 'arena_connect', description: 'arena_start 的连接/恢复别名，不会自行批准浏览器配对。', inputSchema: entrySchema },
   { name: 'arena_status', description: '查看公开配对码、入场状态和服务端结算。等待期间可轮询；入场后使用 game_ 工具持续决策。', inputSchema: emptySchema },
+  { name: 'arena_repair_pairing', description: '用户反馈配对码无效时调用，安全重新申请公开配对码并保留档案。只允许未入场的既有配对，不会自动重启已停止的游戏；不要删除身份文件。', inputSchema: emptySchema },
   { name: 'arena_stop', description: '停止本客户端的自动入场和轮询。abandon=true 请求真实放弃或退出候场；仅服务端确认后才报告终局。', inputSchema: { type: 'object', additionalProperties: false, properties: { abandon: { type: 'boolean', default: true } } } },
 ];
 function object(value, allowed) {
@@ -41,7 +43,7 @@ function entry(value) {
 // Protocol adapter: runtime remains responsible for grants, visibility and terminal authority.
 export function createModelActionServer(runtime, { serverUrl = 'https://xingying.dev' } = {}) {
   const server = new Server({ name: 'model-action', version: VERSION }, { capabilities: { tools: { listChanged: true } },
-    instructions: 'Model行动：先在用户要求时调用 arena_start，向用户展示公开配对码与大厅链接。用户批准后以 arena_status 等待入场。进入 in_world 后持续使用 game_ 工具的真实规则与感知自行游玩，直到服务端明确 ended；总结不代表游戏结束。此 MCP 不创建模型循环，持续调用由宿主 Agent 负责。' });
+    instructions: 'Model行动：先在用户要求时调用 arena_start，向用户展示公开配对码与大厅链接。配对码不能填到邀请码框：先用管理员邀请码进入备赛，再填“插件显示的公开配对码”输入框审阅批准。错误配对请调用 arena_repair_pairing，不得读取或删除私有身份文件。用户批准后以 arena_status 等待入场。进入 in_world 后持续使用 game_ 工具的真实规则与感知自行游玩，直到服务端明确 ended；总结不代表游戏结束。此 MCP 不创建模型循环，持续调用由宿主 Agent 负责。' });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     let game = [];
     if (runtime.state().entry_state === 'in_world') {
@@ -62,12 +64,17 @@ export function createModelActionServer(runtime, { serverUrl = 'https://xingying
         }
         if (runtime.state().entry_state === 'ended') await runtime.stop('server_terminal', { abandon: false });
         const state = await runtime.start({ entry: selected, autoEnter: true });
-        return result({ ...state, lobby_url: serverUrl + '/agent-arena/lobby/', next: state.entry_state === 'in_world' ? '使用 game_ 工具自主游玩直到服务端终局。' : '如有配对码，请在大厅审阅并批准；随后调用 arena_status 等待入场。' });
+        return result(onboardingView(state,{serverUrl}));
       }
       if (name === 'arena_status') {
         object(args, []);
         if (runtime.state().active) await runtime.refresh();
-        return result(runtime.state());
+        return result(onboardingView(runtime.state(),{serverUrl}));
+      }
+      if (name === 'arena_repair_pairing') {
+        object(args, []);
+        if (!runtime.state().pairing) fail('pairing_required');
+        return result(onboardingView(await runtime.repairPairing(),{serverUrl}));
       }
       if (name === 'arena_stop') {
         object(args, ['abandon']);

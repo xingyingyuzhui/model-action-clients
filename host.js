@@ -3,10 +3,12 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { onboardingView } from './lib/onboarding.js';
+import { installCredentialGuard } from './lib/credential-guard.js';
 
 export const name = 'model-action-native';
 export const inject = ['agents', 'tools'];
-const ARENA_NAMES = ['arena_start', 'arena_connect', 'arena_status', 'arena_stop'];
+const ARENA_NAMES = ['arena_start', 'arena_connect', 'arena_status', 'arena_repair_pairing', 'arena_stop'];
 const HASH = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = error => /^[a-z][a-z0-9_]{0,63}$/.test(error?.code ?? '') ? error.code : 'arena_client_error';
@@ -51,9 +53,8 @@ function entryOptions(args = {}) {
   if (args.loadout_id !== undefined && !['rifle', 'smg', 'shotgun', 'armored'].includes(args.loadout_id)) fail('arena_invalid_entry');
   return { mode_id, room_id, ...(args.name === undefined ? {} : { name: args.name.trim() }), ...(args.loadout_id === undefined ? {} : { loadout_id: args.loadout_id }) };
 }
-function humanAuthorization(agent) {
-  // Only the current turn's authenticated human input can authorize a new run.
-  // A tool result, automatic plugin message, child task or old prompt cannot.
+function currentHumanInput(agent) {
+  // The latest authenticated human message in this turn is the sole authority.
   const log = agent.session?.log;
   if (!Array.isArray(log)) fail('arena_human_authorization_required');
   for (let i = log.length - 1; i >= 0; i--) {
@@ -62,29 +63,39 @@ function humanAuthorization(agent) {
     if (event.type !== 'user/message' || event.data?.source?.kind !== 'user') continue;
     const content = event.data.content;
     const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(c => c.type === 'text').map(c => c.text).join('\n') : '';
-    const action = /加入|进入|入场|开战|启动|开始|游玩|玩|测试|验收|连接|配对|继续|恢复|start|join|play|connect/i;
-    const game = /Model行动|model[\s_-]*action|游戏|搜打撤|大逃杀|arena|agent|插件|比赛|房间/i;
-    const refusal = /(?:不要|禁止|别|do not|don't)\s*(?:再\s*)?(?:加入|进入|启动|开始|开战|玩|start|join|play)/i;
-    if (!action.test(text) || !game.test(text) || refusal.test(text)) fail('arena_human_authorization_required');
-    return Number.isInteger(event.seq) ? event.seq : i;
+    return { text, seq: Number.isInteger(event.seq) ? event.seq : i };
   }
   fail('arena_human_authorization_required');
+}
+const refusal = /(?:不要|不用|禁止|别|勿|不想|取消|停止|do not|don't|do\s+not|stop|cancel)[^。！？\n]{0,32}(?:加入|进入|入场|启动|开始|开启|打开|开战|游玩|玩|连接|配对|恢复|start|join|play|connect|open|enable)/i;
+function humanAuthorization(agent) {
+  const { text, seq } = currentHumanInput(agent);
+  const action = /加入|进入|入场|开战|启动|开始|开启|打开|游玩|玩|测试|验收|连接|配对|继续|恢复|start|join|play|connect|open|enable/i;
+  const game = /Model行动|model[\s_-]*action|游戏|搜打撤|大逃杀|\barena\b/i;
+  if (!action.test(text) || !game.test(text) || refusal.test(text)) fail('arena_human_authorization_required');
+  return seq;
+}
+function pairingRepairAuthorization(agent) {
+  const { text, seq } = currentHumanInput(agent);
+  if (!/(?:配对码|配对).{0,24}(?:无效|不对|失效|错误|失败|过期|不能用|刷新|重置|修复|重新)|(?:重新|刷新|重置|修复|换个|换一个).{0,12}配对(?:码)?|(?:pairing|pair)\s*(?:code)?.{0,20}(?:invalid|expired|failed|refresh|renew|repair)/i.test(text) || refusal.test(text)) fail('arena_pairing_repair_authorization_required');
+  return seq;
 }
 
 export function installArenaHost(ctx, config, dependencies) {
   const cfg = configuration(config), { ArenaClient, AtomicStore, ArenaRuntime, defineTool, createMcpToolDefinition, createUserMessage } = dependencies;
   const clock = dependencies.clock ?? Date.now;
   const states = new Map(); let disposed = false;
+  const removeCredentialGuard = installCredentialGuard(ctx, { home: cfg.home });
   function caller(agent) {
     if (disposed || !agent || ctx.agents.get(agent.id) !== agent || !ctx.agents.roots().includes(agent)) fail('arena_root_agent_required');
     return agent;
   }
   function snapshot(state) {
-    return publicValue({ ...state?.runtime?.state?.(), server_url: cfg.serverUrl,
+    return publicValue(onboardingView({ ...state?.runtime?.state?.(), plugin_loaded: true, plugin_name: 'dsh-model-action', server_url: cfg.serverUrl,
       result: state?.result ?? state?.runtime?.state?.().result ?? null,
       native_loop: { armed: !!state?.armed, tool_calls: state?.calls ?? 0, continuations: state?.continuations ?? 0,
         stop_reason: state?.stopReason ?? null, max_seconds: cfg.maxSeconds, max_tool_calls: cfg.maxToolCalls, max_continuations: cfg.maxContinuations },
-      ...(state?.lastError ? { host_error: { code: state.lastError } } : {}) });
+      ...(state?.lastError ? { host_error: { code: state.lastError } } : {}) }, { serverUrl: cfg.serverUrl, clock }));
   }
   function notify(state) { for (const wake of [...state.waiters]) wake(); }
   function budget(state) {
@@ -210,12 +221,14 @@ export function installArenaHost(ctx, config, dependencies) {
     state = { agent, store, client, runtime: null, scope: null, scopeCtx: null, armed: false, entry: null,
       calls: 0, continuations: 0, enteredAt: null, result: null, terminalClosing: false, waiters: new Set(), lastAuthorization: -1,
       stopFlight: null, stopReason: null, generation: 0, activation: null, activationGeneration: null,
-      bridgeFlight: null, bridgeReady: false, bridgeGeneration: null, gameNames: new Set(), pendingMessage: null };
+      bridgeFlight: null, bridgeReady: false, bridgeGeneration: null, gameNames: new Set(), pendingMessage: null,
+      lastRepairAuthorization: -1, repairFlight: null };
     states.set(agent, state); return state;
   }
   async function start(args, exec) {
     const agent = caller(exec.agent); exec.signal.throwIfAborted();
     let state = states.get(agent);
+    if (state?.repairFlight) fail('arena_pairing_repair_in_progress');
     if (state?.armed) return snapshot(state);
     const authorization = humanAuthorization(agent);
     if (state && authorization <= state.lastAuthorization) fail('arena_new_human_start_required');
@@ -242,7 +255,7 @@ export function installArenaHost(ctx, config, dependencies) {
         }
       }
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.1.1',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.1.2',
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });
@@ -253,13 +266,41 @@ export function installArenaHost(ctx, config, dependencies) {
     } catch (e) { state.lastError = safeCode(e); await stop(state, exec.signal.aborted ? 'user_stop' : 'client_error'); fail(state.lastError); }
     finally { exec.signal.removeEventListener('abort', cancelled); }
   }
+  async function repairPairing(args, exec) {
+    const agent = caller(exec.agent); exec.signal.throwIfAborted();
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length) fail('arena_invalid_entry');
+    const authorization = pairingRepairAuthorization(agent);
+    const state = states.get(agent);
+    if (!state || state.lastAuthorization < 0 || !state.runtime) fail('arena_pairing_repair_requires_prior_start');
+    const view = state.runtime.state();
+    if (state.enteredAt !== null || view.current_attempt || ['in_world', 'waiting', 'countdown', 'queued', 'offered', 'ended'].includes(view.entry_state)) fail('arena_pairing_repair_unavailable');
+    if (state.repairFlight) { await state.repairFlight; return snapshot(state); }
+    if (state.lastRepairAuthorization === authorization) {
+      if (state.repairFlight) await state.repairFlight;
+      return snapshot(state);
+    }
+    const flight = (async () => {
+      // Repair never re-arms a stopped native loop or starts room preparation.
+      await stop(state, state.stopReason ?? 'pairing_repair', { cancel: false });
+      exec.signal.throwIfAborted();
+      await state.runtime.repairPairing();
+      exec.signal.throwIfAborted();
+      state.lastRepairAuthorization = authorization; state.lastError = null;
+      return snapshot(state);
+    })();
+    state.repairFlight = flight;
+    try { return await flight; }
+    catch (error) { state.lastError = safeCode(error); fail(state.lastError); }
+    finally { if (state.repairFlight === flight) state.repairFlight = null; }
+  }
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
   const parameters = { mode_id: { type: 'string', enum: ['extraction', 'battle_royale'] }, room_id: { type: 'json' }, name: { type: 'string' }, loadout_id: { type: 'string', enum: ['rifle', 'smg', 'shotgun', 'armored'] } };
   const definitions = [
-    defineTool({ name: 'arena_start', description: 'Start the current human-authorized agent in the arena using native dsh. No token needed. Returns a public pairing code when browser approval is needed; continues this same native session until terminal or explicit stop/budget.', parameters, output, execute: start }),
-    defineTool({ name: 'arena_connect', description: 'Connect or resume this human-authorized arena session. Display the public pairing code to the user; private proofs and game tokens stay in the plugin.', parameters, output, execute: start }),
-    defineTool({ name: 'arena_status', description: 'Read this session arena state, public pairing code, loop budgets and confirmed result. Does not expose credentials.', parameters: {}, output,
+    defineTool({ name: 'arena_start', description: '开启/启动 Model行动 游戏插件并按当前用户指令入场。插件已加载，无需 Bash 查找或读取配置。返回 instructions 中的准确配对步骤：用户先用服务器邀请码进入大厅，再把 pairing.user_code 填到「插件显示的公开配对码」框并批准；配对码绝不是邀请码。不得读取、打印、修改或删除私有身份文件，凭证由插件管理。', parameters, output, execute: start }),
+    defineTool({ name: 'arena_connect', description: '连接或恢复用户明确要求的 Model行动 游戏；与 arena_start 相同。按返回的 instructions 给用户配对指导，私密凭证不进入对话。若用户只反馈「配对码无效」，使用 arena_repair_pairing，不要读写身份文件。', parameters, output, execute: start }),
+    defineTool({ name: 'arena_status', description: '检查 Model行动 插件是否已加载、当前配对/入场状态、预算和真实结果。直接使用此工具诊断，不需 Bash 翻源码或私有文件。返回 instructions 提供邀请码与配对码的分步说明、准确到期时间；不能凭未连接状态断言服务端已作废配对码。', parameters: {}, output,
       execute: (_args, exec) => { const agent = caller(exec.agent); return snapshot(states.get(agent)); } }),
+    defineTool({ name: 'arena_repair_pairing', description: '修复本会话此前启动的 Model行动 配对。用户反馈「配对码无效」「重新配对」「刷新配对码」即可，无需重复游戏名。仅重新申请公开配对码、保留档案，不开始游戏、不恢复已停止的游玩循环；连接有效或已有对局时拒绝。不得用 Bash 删除身份文件。', parameters: {}, output, execute: repairPairing }),
     defineTool({ name: 'arena_stop', description: 'Stop this native arena loop. abandon=false stops decisions while the server character can remain alive; abandon=true explicitly requests surrender. Never claims terminal without server confirmation.', parameters: { abandon: { type: 'boolean' } }, output,
       execute: async (args, exec) => { const agent = caller(exec.agent); if (args.abandon !== undefined && typeof args.abandon !== 'boolean') fail('arena_invalid_entry'); return stop(states.get(agent), 'user_stop', { abandon: args.abandon === true, cancel: false }); } }),
   ];
@@ -313,6 +354,7 @@ export function installArenaHost(ctx, config, dependencies) {
     disposed = true; for (const off of listeners) off();
     await Promise.allSettled([...states.values()].map(disposeState));
     for (const off of disposers) off();
+    removeCredentialGuard();
   })();
   ctx.effect(() => dispose, 'model-action-native.lifecycle');
   return { dispose };

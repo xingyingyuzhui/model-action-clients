@@ -20,6 +20,12 @@ function mcpUrl(value, serverOrigin) {
   return url.href;
 }
 function requireText(value, max) { if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) throw error('invalid_client_input'); }
+function pairingRecord(reply) {
+  if (!identifier(reply.pairing_id) || !token(reply.device_secret) || typeof reply.user_code !== 'string' || !/^[A-Z0-9]{10}$/.test(reply.user_code) || !Number.isSafeInteger(reply.expires_at_ms) || !Number.isSafeInteger(reply.poll_interval_ms)) throw error('invalid_response');
+  return { pairing_id: reply.pairing_id, device_secret: reply.device_secret, user_code: reply.user_code, expires_at_ms: reply.expires_at_ms, poll_interval_ms: reply.poll_interval_ms };
+}
+const publicPairing = pairing => ({ state: 'pending', user_code: pairing.user_code, expires_at_ms: pairing.expires_at_ms, poll_interval_ms: pairing.poll_interval_ms });
+
 
 // The client never approves a browser pairing, manipulates a browser session or
 // exposes game credentials as a tool result. All grants are durable before ACK.
@@ -103,10 +109,46 @@ export class ArenaClient {
       }
       if (value.control || (value.pairing?.device_secret && value.pairing.expires_at_ms > this.clock())) throw error('pairing_in_progress');
       const reply = await this.request('/client/v2/pair/init', { body: { label, version, protocol_version: 1 } });
-      if (!identifier(reply.pairing_id) || !token(reply.device_secret) || typeof reply.user_code !== 'string' || !/^[A-Z0-9]{10}$/.test(reply.user_code) || !Number.isSafeInteger(reply.expires_at_ms) || !Number.isSafeInteger(reply.poll_interval_ms)) throw error('invalid_response');
-      value.pairing = { pairing_id: reply.pairing_id, device_secret: reply.device_secret, user_code: reply.user_code, expires_at_ms: reply.expires_at_ms, poll_interval_ms: reply.poll_interval_ms };
+      value.pairing = pairingRecord(reply);
       await this.store.write(value);
-      return { state: 'pending', user_code: reply.user_code, expires_at_ms: reply.expires_at_ms, poll_interval_ms: reply.poll_interval_ms };
+      return publicPairing(value.pairing);
+    });
+  }
+
+  // Explicit public repair API: never unlink private state or discard a grant
+  // before the replacement proof has been received and durably committed.
+  async repairPairing({ label, version }) {
+    requireText(label, 60); requireText(version, 40);
+    return this.exclusive(async () => {
+      const value = await this.load();
+      if (value.attempt || value.pending_claim || Object.keys(value.pending_operations).length) throw error('pairing_repair_not_safe');
+      if (value.control) {
+        if (!token(value.control.token)) throw error('store_corrupt');
+        try {
+          await this.request('/client/v2/session', { method: 'GET', bearer: value.control.token });
+          throw error('connection_active');
+        } catch (err) { if (err.status !== 401) throw err; }
+      }
+      let reply;
+      if (value.pairing?.device_secret) {
+        try {
+          // Server replacement and browser approval serialize on the same
+          // pending request. Replay of this exact old proof returns the same
+          // replacement, including after a transport/disk failure here.
+          reply = await this.request('/client/v2/pair/replace', { body: { pairing_id: value.pairing.pairing_id, device_secret: value.pairing.device_secret, label, version, protocol_version: 1 } });
+        } catch (err) {
+          // Only an explicit missing/expired pairing proves that the old code
+          // cannot be approved. An unsupported route is not such evidence.
+          if (![404,410].includes(err.status) || !['pairing_not_found','pairing_expired'].includes(err.code)) throw err;
+        }
+      }
+      reply ??= await this.request('/client/v2/pair/init', { body: { label, version, protocol_version: 1 } });
+      const pairing = pairingRecord(reply);
+      // Preserve profiles and all other harmless local metadata. On transport,
+      // validation or disk failure the prior proof is still the committed one.
+      value.pairing = pairing; value.control = null;
+      await this.store.write(value);
+      return { ...publicPairing(pairing), profiles_preserved: Object.keys(value.profiles).length };
     });
   }
 

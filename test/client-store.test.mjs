@@ -202,3 +202,78 @@ test('store size boundary includes the committed newline and every accepted writ
     assert.equal(fs.statSync(file).size,limit);assert.deepEqual(await store.read(),accepted);
   }finally{await store.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('explicit pairing repair renews an unexpired public code atomically and preserves saved identities',async()=>{
+  let generation=0;
+  const f=fixture({intercept:async({route})=>{
+    if(route.endsWith('/pair/init'))return json({pairing_id:'pair_'+(++generation),user_code:generation===1?'OLD1234567':'NEW1234567',device_secret:PROOF,expires_at_ms:Date.now()+300000,poll_interval_ms:2000});
+    if(route.endsWith('/pair/replace'))return json({pairing_id:'pair_'+(++generation),user_code:'NEW1234567',device_secret:PROOF,expires_at_ms:Date.now()+300000,poll_interval_ms:2000});
+  }});
+  await f.client.pairInit({label:'test',version:'1'});
+  const saved=await f.store.read();saved.profiles.agent_saved={public_agent_id:'agent_saved',recovery_secret:RECOVERY,acked:true};saved.client_metadata={untouched:true};await f.store.write(saved);
+  const result=await f.client.repairPairing({label:'test',version:'1'});
+  assert.equal(result.user_code,'NEW1234567');assert.equal(result.profiles_preserved,1);
+  const repaired=await f.store.read();assert.deepEqual(repaired.profiles,saved.profiles);assert.deepEqual(repaired.client_metadata,saved.client_metadata);assert.deepEqual(repaired.pending_operations,{});
+  assert.ok(!JSON.stringify(result).includes(PROOF));assert.ok(!JSON.stringify(result).includes(RECOVERY));
+});
+
+test('pairing repair cannot replace an active control, active attempt or pending entry mutation',async()=>{
+  const f=fixture();await connect(f);
+  const before=await f.store.read(),count=f.calls.length;
+  await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'connection_active'});
+  assert.deepEqual(await f.store.read(),before);assert.equal(f.calls.length,count+1);
+  for(const patch of [{attempt:{attempt_id:'attempt_active'}},{pending_claim:{body:{attempt_id:'attempt_active'}}},{pending_operations:{queue:{key:'pending',body:{}}}}]){
+    await f.store.write({...before,...patch});const calls=f.calls.length;
+    await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'pairing_repair_not_safe'});assert.equal(f.calls.length,calls);
+  }
+});
+
+test('repair verifies control 401 independently; network errors and failed replacement writes retain the old proof',async()=>{
+  let mode='normal',generation=0;
+  const base=memory();let rejectWrite=false;
+  const store={read:base.read,write:async value=>{if(rejectWrite)throw Object.assign(new Error('disk failed'),{code:'store_write_failed'});await base.write(value);}};
+  const f=fixture({store,intercept:async({route})=>{
+    if(route.endsWith('/session')&&mode==='network')throw new Error('secret transport '+CONTROL);
+    if(route.endsWith('/session')&&mode==='unauthorized')return json({error:{code:'client_unauthorized'}},401);
+    if(route.endsWith('/pair/init'))return json({pairing_id:'pair_'+(++generation),user_code:generation===1?'OLD1234567':'NEW1234567',device_secret:PROOF,expires_at_ms:Date.now()+300000,poll_interval_ms:2000});
+  }});
+  await connect(f);const saved=await f.store.read();saved.profiles.agent_saved={recovery_secret:RECOVERY,acked:true};await f.store.write(saved);
+  mode='network';await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'network_error'});assert.deepEqual(await f.store.read(),saved);
+  mode='unauthorized';rejectWrite=true;await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'store_write_failed'});assert.deepEqual(await f.store.read(),saved);
+  rejectWrite=false;const replacement=await f.client.repairPairing({label:'test',version:'1'});assert.equal(replacement.user_code,'NEW1234567');assert.equal((await f.store.read()).control,null);assert.deepEqual((await f.store.read()).profiles,saved.profiles);
+});
+
+test('pairing repair preserves a browser approval in delivery instead of abandoning its proof',async()=>{
+  const f=fixture({intercept:async({route})=>route.endsWith('/pair/replace')?json({error:{code:'pairing_approval_pending'}},409):null});await f.client.pairInit({label:'test',version:'1'});const before=await f.store.read();
+  await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'pairing_approval_pending'});
+  assert.deepEqual(await f.store.read(),before);assert.equal(f.calls.filter(c=>c.route.endsWith('/pair/init')).length,1);
+  // The original handoff remains usable after repair was declined.
+  assert.equal((await f.client.pairPoll()).state,'connected');
+});
+
+test('expired or unknown server pairing can be repaired without asserting why it became unavailable',async()=>{
+  for(const status of [404,410]){
+    let generation=0;
+    const f=fixture({intercept:async({route})=>{
+      if(route.endsWith('/pair/init'))return json({pairing_id:'pair_'+(++generation),user_code:generation===1?'OLD1234567':'NEW1234567',device_secret:PROOF,expires_at_ms:Date.now()+300000,poll_interval_ms:2000});
+      if(route.endsWith('/pair/replace'))return json({error:{code:status===404?'pairing_not_found':'pairing_expired'}},status);
+    }});
+    await f.client.pairInit({label:'test',version:'1'});assert.equal((await f.client.repairPairing({label:'test',version:'1'})).user_code,'NEW1234567');
+  }
+});
+
+
+test('atomic pairing replacement retries the same proof after a lost reply and never falls back for unsupported endpoints',async()=>{
+  let loseReply=true;const replacement={pairing_id:'pair_new',user_code:'NEW1234567',device_secret:PROOF,expires_at_ms:Date.now()+300000,poll_interval_ms:2000};
+  const f=fixture({intercept:async({route})=>{
+    if(route.endsWith('/pair/replace')){if(loseReply){loseReply=false;throw new Error('lost replacement response '+PROOF);}return json(replacement);}
+  }});
+  await f.client.pairInit({label:'test',version:'1'});const before=await f.store.read();
+  await assert.rejects(f.client.repairPairing({label:'test',version:'1'}),{code:'network_error'});assert.deepEqual(await f.store.read(),before);
+  assert.equal((await f.client.repairPairing({label:'test',version:'1'})).user_code,'NEW1234567');
+  const calls=f.calls.filter(x=>x.route.endsWith('/pair/replace'));assert.equal(calls.length,2);assert.deepEqual(calls[0].body,calls[1].body);assert.equal(f.calls.filter(x=>x.route.endsWith('/pair/init')).length,1);assert.ok(!f.calls.some(x=>x.route.endsWith('/pair/poll')));
+  for(const [status,code] of [[404,'not_found'],[401,'client_unauthorized'],[410,'grant_expired']]){
+    const old=fixture({intercept:async({route})=>route.endsWith('/pair/replace')?json({error:{code}},status):null});await old.client.pairInit({label:'test',version:'1'});const saved=await old.store.read();
+    await assert.rejects(old.client.repairPairing({label:'test',version:'1'}),{code});assert.deepEqual(await old.store.read(),saved);assert.equal(old.calls.filter(x=>x.route.endsWith('/pair/init')).length,1);
+  }
+});

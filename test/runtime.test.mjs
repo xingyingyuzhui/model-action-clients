@@ -140,3 +140,33 @@ test('an explicitly requested next start may prepare from a prior terminal; term
   await f.runtime.refresh();assert.equal(f.terminals.length,1);assert.equal(f.runtime.state().phase,'stopped');assert.equal(f.runtime.state().loop.reason,null);
 });
 
+
+test('repairing a pending pairing returns a fresh code while keeping gameplay stopped until explicit start',async t=>{
+  const f=fixture(t,{state:'preparing',connected:false});
+  f.client.repairPairing=async options=>{f.calls.push('repairPairing');assert.equal(options.label,'Model行动 client');f.local.pairing={user_code:'NEW1234567',expires_at_ms:301000,poll_interval_ms:2000};return {state:'pending',...f.local.pairing};};
+  await f.runtime.start({autoEnter:true});
+  const repaired=await f.runtime.repairPairing();assert.equal(repaired.pairing.user_code,'NEW1234567');assert.equal(repaired.active,false);assert.equal(repaired.repair.requires_explicit_start,true);assert.equal(repaired.loop.state,'stopped');
+  assert.equal(f.runtime.autoEnter,false);assert.equal(f.runtime.timer,null);assert.equal(f.wakes.length,0);assert.ok(!f.calls.includes('prepareEntry'));
+  f.local.connected=true;await f.runtime.refresh();assert.ok(!f.calls.includes('prepareEntry'));
+  await f.runtime.start({autoEnter:true});assert.equal(f.runtime.state().entry_state,'in_world');
+});
+
+test('pairing repair never interrupts an active room, reservation or a previously entered runtime',async t=>{
+  for(const state of ['ready','queued','offered','waiting','countdown','in_world','ended']){
+    const f=fixture(t,{state});f.client.repairPairing=async()=>{throw new Error('must not repair');};await f.runtime.start();
+    const stops=f.calls.filter(x=>x==='cancelPending').length;
+    await assert.rejects(f.runtime.repairPairing(),{code:'pairing_repair_not_safe'});assert.equal(f.calls.filter(x=>x==='cancelPending').length,stops);
+  }
+});
+
+test('repair drains the old poll and blocks concurrent start, so a late result cannot revive gameplay or overwrite the new code',async t=>{
+  let releasePoll,releaseRepair;const poll=new Promise(resolve=>releasePoll=resolve),repair=new Promise(resolve=>releaseRepair=resolve);
+  const f=fixture(t,{state:'preparing',connected:false});
+  f.client.pairPoll=async()=>{f.calls.push('pairPoll');await poll;return {state:'pending'};};
+  f.client.repairPairing=async()=>{f.calls.push('repairPairing');await repair;f.local.pairing={user_code:'NEW1234567',expires_at_ms:301000,poll_interval_ms:2000};return {state:'pending',...f.local.pairing};};
+  await f.runtime.start({autoEnter:true});const pending=f.runtime.refresh();await settle();
+  const fix=f.runtime.repairPairing();assert.equal(f.runtime.repairPairing(),fix);
+  await assert.rejects(f.runtime.start({autoEnter:true}),{code:'pairing_repair_in_progress'});
+  await settle();releasePoll();await pending;releaseRepair();await fix;
+  assert.equal(f.runtime.state().pairing.user_code,'NEW1234567');assert.equal(f.runtime.state().active,false);assert.equal(f.runtime.autoEnter,false);assert.equal(f.wakes.length,0);assert.ok(!f.calls.includes('prepareEntry'));
+});
