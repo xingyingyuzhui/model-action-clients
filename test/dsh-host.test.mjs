@@ -670,7 +670,7 @@ test('existing game stop requires current authentic explicit abandonment and doe
   assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
   assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
   const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
-  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.1');
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.2');
   assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
   nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
 });

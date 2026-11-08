@@ -71,3 +71,31 @@ test('real runtime order prepares first and acknowledges a new profile afterward
  const reloaded=new ArenaClient({serverUrl:'https://arena.test',store:f.store,clock:()=>NOW});
  assert.deepEqual((await reloaded.publicState()).confirmed_entry,ENTRY);
 });
+
+test('a browser-era lease can retain conversational preferences only after current server verification',async()=>{
+ const f=fixture();let value=await f.store.read();delete value.native_access;await f.store.write(value);
+ assert.equal((await f.client.publicState()).confirmed_entry,null);
+ await assert.rejects(f.client.rememberConfirmedEntry(ENTRY),{code:'native_access_required'});
+ await f.client.connectNative();await f.client.rememberConfirmedEntry(ENTRY);
+ assert.deepEqual((await f.client.publicState()).confirmed_entry,ENTRY);
+ value=await f.store.read();assert.match(value.native_verified_control,/^[a-f0-9]{64}$/);
+ assert.ok(!JSON.stringify(await f.client.publicState()).includes(value.native_verified_control));
+ await f.store.write({...value,control:{...value.control,token:'different_control_123456789'}});
+ assert.equal((await f.client.publicState()).confirmed_entry,null,'verification cannot be copied to a replacement lease');
+});
+test('rejected legacy lease verification cannot manufacture preference consent',async()=>{
+ const f=fixture();const value=await f.store.read();delete value.native_access;await f.store.write(value);
+ f.client.fetcher=async()=>new Response(JSON.stringify({schema_version:2,error:{code:'client_unauthorized'}}),{status:401});
+ await assert.rejects(f.client.connectNative(),{code:'invite_required'});
+ const after=await f.store.read();assert.equal(after.control,null);assert.equal(after.native_verified_control,undefined);
+ assert.equal((await f.client.publicState()).confirmed_entry,null);
+});
+
+test('old MCP profile without last_profile_id becomes reusable after verified lease and authoritative prepare',async()=>{
+ const f=fixture({legacy:false});const value=await f.store.read();delete value.native_access;delete value.last_profile_id;await f.store.write(value);
+ await f.client.connectNative();await f.client.rememberConfirmedEntry(ENTRY);
+ assert.equal((await f.client.publicState()).confirmed_entry,null);
+ await f.client.prepareEntry(ENTRY);
+ assert.equal((await f.store.read()).last_profile_id,ID);
+ assert.deepEqual((await f.client.publicState()).confirmed_entry,ENTRY);
+});
