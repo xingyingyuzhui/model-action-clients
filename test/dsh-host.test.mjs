@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function fixture(config = {}, { qualified = true, clock = Date.now, pending = false } = {}) {
+function fixture(config = {}, { qualified = true, clock = Date.now, pending = false, confirmedEntry = null } = {}) {
   const globals = new Map(), listeners = new Map(), roots = [], agents = new Map(), stores = [], runtimes = [], clients = [], globalGuards = [];
   let nextMessage = 0;
   const register = map => definition => {
@@ -22,7 +22,8 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
   class Store { constructor(file) { this.file = file; this.closed = false; stores.push(this); } async close() { this.closed = true; } }
   class Client {
     constructor(options) { this.options = options; this.connected = qualified; this.saved = qualified; this.pending = pending; this.resets = 0; this.nativeCalls = []; this.catalogValue = {catalog_revision:'native-test-1',appearance:{character:[{id:'default',name:'默认形象',enabled:true},{id:'qwen',name:'Qwen 娘',enabled:true}]},loadouts:[{id:'rifle',name:'步枪配置',enabled:true},{id:'smg',name:'冲锋枪配置',enabled:true}],mode_ids:['extraction','battle_royale']}; clients.push(this); }
-    async publicState() { return { connected: this.connected, access_credential_saved:this.saved, native_connect_pending:this.pending, profiles:[] }; }
+    async publicState() { return { connected: this.connected, access_credential_saved:this.saved, native_connect_pending:this.pending, profiles:[], confirmed_entry:this.confirmedEntry??confirmedEntry }; }
+    async rememberConfirmedEntry(entry) { (this.remembered??=[]).push(structuredClone(entry)); if(this.rememberGate)await this.rememberGate; if(this.rememberFailures){this.rememberFailures--;throw Object.assign(new Error('write failed'),{code:'store_write_failed'});} this.confirmedEntry=structuredClone(entry); }
     async connectNative(args={}) { this.nativeCalls.push(args); if(this.nativeError)throw this.nativeError; if(this.sessionError){if(this.sessionError.status!==401)throw this.sessionError;await this.resetConnection();this.sessionError=null;} if(args.ticket||this.pending){this.saved=true;this.pending=false;} if(!this.saved)throw Object.assign(new Error('access required'),{code:'native_access_required'});this.connected=true;return {state:'connected',session:{state:this.serverState??'preparing'}}; }
     async catalog() { return structuredClone(this.catalogValue); }
     async session() { if (this.sessionError) throw this.sessionError; return { state: this.serverState ?? 'preparing', ...(this.serverAttempt ? {attempt:this.serverAttempt} : {}), ...(this.serverResult ? {result:this.serverResult} : {}) }; }
@@ -36,6 +37,7 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
     state() { return structuredClone(this.view); }
     async start(options) {
       this.entry = options.entry; this.startOptions = options;
+      if(this.options.client.runtimeStartError)throw this.options.client.runtimeStartError;
       if (options.autoEnter === false) { this.view = { ...this.view, active:true, entry_state:this.options.client.serverState }; return this.state(); }
       this.view = { ...this.view, phase: 'waiting', active: true, entry_state:'waiting', game_token: 'private-never-output' };
       this.options.onState(this.state()); return this.state();
@@ -99,16 +101,17 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
   return { ctx, host, globals, stores, runtimes, clients, agent, run, emit, globalGuards };
 }
 
-test('native start rejects child agents, non-human/tool messages, unrelated human turns and secret arguments', async t => {
+test('native start rejects child agents, non-human messages and secret arguments without demanding a game-name password', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
   await assert.rejects(f.run('arena_start', {}, f.agent('child', { root: false })), { code: 'arena_root_agent_required' });
   await assert.rejects(f.run('arena_start', {}, f.agent('injection', { source: 'plugin' })), { code: 'arena_human_authorization_required' });
-  await assert.rejects(f.run('arena_start', {}, f.agent('weather', { text: '今天天气如何' })), { code: 'arena_human_authorization_required' });
   await assert.rejects(f.run('arena_start', { game_token: 'secret' }, f.agent('secret')), { code: 'arena_invalid_entry' });
-  for (const text of ['打开天气插件', '开启corn-cad插件', '开启这个插件', '启动 agent', '开始比赛', '打开房间']) {
-    await assert.rejects(f.run('arena_start', {}, f.agent('unrelated-' + text, { text })), { code: 'arena_human_authorization_required' });
-  }
   assert.equal(f.stores.length, 0);
+  for (const text of ['今天天气如何', '开启这个插件', '再跑一轮实时', '开始比赛', '打开房间']) {
+    const status=await f.run('arena_start', {}, f.agent('preparation-' + text, { text }));
+    assert.equal(status.native_loop.armed,false,'opening preparation is not match entry');
+  }
+  assert.equal(f.runtimes.length,0);
 });
 
 test('session-scoped native tools isolate two agents and never expose private credentials', async t => {
@@ -366,13 +369,14 @@ function nextHumanTurn(agent, text, source = 'user') {
 }
 const entry = {name:'测试玩家',character_id:'qwen',loadout_id:'rifle',mode_id:'extraction',room_id:'public-1'};
 async function beginGame(f,a,overrides={}) {
-  await f.run('arena_start',{},a);
+  const started=await f.run('arena_start',{},a);
+  if(started.native_loop.armed)return started;
   const prepared=await f.run('arena_prepare',{...entry,...overrides},a);
   nextHumanTurn(a,'确认');
   return f.run('arena_confirm',{confirmation_id:prepared.dialogue.confirmation_id},a);
 }
 
-test('native start opens conversation only, naturally accepts enable/open and rejects unrelated or negative intents',async t=>{
+test('native start opens conversation without queueing and rejects explicit negative intents',async t=>{
   const f=fixture({}, {qualified:false});t.after(()=>f.host.dispose());
   for(const text of ['开启model行动插件','打开 Model行动','enable Model Action plugin']){
     const a=f.agent('dialogue-'+text,{text});const status=await f.run('arena_start',{},a);
@@ -380,7 +384,7 @@ test('native start opens conversation only, naturally accepts enable/open and re
     await f.emit('agent/turn-stopping',{agent:a,signal:a.controller.signal});
   }
   assert.equal(f.runtimes.length,0);assert.ok(f.clients.every(c=>c.nativeCalls.length===0));
-  for(const text of ['不要开启model行动插件','别打开Model行动','do not enable Model Action plugin','打开天气插件','开启corn-cad插件'])await assert.rejects(f.run('arena_start',{},f.agent('negative-'+text,{text})),{code:'arena_human_authorization_required'});
+  for(const text of ['不要开启model行动插件','别打开Model行动','do not enable Model Action plugin'])await assert.rejects(f.run('arena_start',{},f.agent('negative-'+text,{text})),{code:'arena_human_authorization_required'});
 });
 
 test('a current human invite or full same-origin link grants access without exposing it in tool arguments or output',async t=>{
@@ -431,6 +435,182 @@ test('catalog revision changes, expired confirmations and plugin-produced confir
   const b=f.agent('catalog');await f.run('arena_start',{},b);const proposal=await f.run('arena_prepare',entry,b);f.clients.at(-1).catalogValue.catalog_revision='new-catalog';nextHumanTurn(b,'确认');await assert.rejects(f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},b),{code:'arena_confirmation_stale'});
   const c=f.agent('plugin-confirm');await f.run('arena_start',{},c);const automatic=await f.run('arena_prepare',entry,c);nextHumanTurn(c,'确认','plugin');await assert.rejects(f.run('arena_confirm',{confirmation_id:automatic.dialogue.confirmation_id},c),{code:'arena_human_authorization_required'});
   assert.equal(f.runtimes.length,0);
+});
+
+test('natural confirmation accepts a tactical instruction after an intervening configuration question',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('natural-confirm');
+  await f.run('arena_start',{},a);const pending=await f.run('arena_prepare',entry,a);
+  nextHumanTurn(a,'这套装备多少钱？');
+  assert.equal((await f.run('arena_start',{},a)).phase,'awaiting_confirmation');
+  nextHumanTurn(a,'好的，这次多拿点钱再撤离，可以开始了');
+  const result=await f.run('arena_confirm',{confirmation_id:pending.dialogue.confirmation_id},a);
+  assert.equal(result.native_loop.armed,true);assert.equal(f.runtimes.length,1);
+  assert.deepEqual(f.clients[0].remembered,[entry]);
+});
+
+test('asking about appearance choices does not invalidate a reviewed configuration',async t=>{
+  for(const question of ['可以选择形象吗？','Qwen 娘有什么不同？','冲锋枪配置有什么优点？']){
+    const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('options-question-'+question);
+    await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);
+    nextHumanTurn(a,question);assert.equal((await f.run('arena_start',{},a)).phase,'awaiting_confirmation');
+    nextHumanTurn(a,'就这套开始，多拿点钱再撤离');
+    const result=await f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a);
+    assert.equal(result.native_loop.armed,true);assert.deepEqual(f.runtimes[0].entry,entry);
+  }
+});
+
+test('a polite request to change to a specific configuration invalidates the previous summary',async t=>{
+  for(const text of ['可以换成默认形象吗？','装备能改成冲锋枪吗？']){
+    const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('polite-change-'+text);
+    await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);
+    nextHumanTurn(a,text);nextHumanTurn(a,'好');
+    await assert.rejects(f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a),{code:'arena_human_confirmation_required'});
+    assert.equal(f.runtimes.length,0);
+  }
+});
+
+test('the two actual-session replay requests reuse a confirmed configuration without another proposal or confirmation',async t=>{
+  for(const text of ['再跑一轮实时','要多拿点钱再去撤离，再来一轮，确认开始','别太早撤离，再来一局','不用换形象再来一局']){
+    const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('repeat-'+text);
+    await beginGame(f,a);await f.runtimes[0].terminal({outcome:'extracted'});
+    await f.emit('session/event',a.session,{type:'turn/end',data:{reason:{kind:'completed'}}});
+    assert.equal(f.runtimes.length,1,'a terminal never starts another match on its own');
+    nextHumanTurn(a,text);const result=await f.run('arena_start',{},a);
+    assert.equal(result.native_loop.armed,true);assert.equal(result.dialogue.reused_configuration,true);
+    assert.equal(result.dialogue.confirmation_id,null);assert.equal(f.runtimes.length,2);
+    assert.deepEqual(f.runtimes[1].entry,entry);
+    await f.run('arena_start',{},a);assert.equal(f.runtimes.length,2,'same request while starting is idempotent');
+    await f.runtimes[1].terminal();await f.emit('session/event',a.session,{type:'turn/end',data:{reason:{kind:'completed'}}});
+    await assert.rejects(f.run('arena_start',{},a),{code:'arena_human_authorization_required'});
+    assert.equal(f.runtimes.length,2,'a completed human play request cannot be replayed');
+  }
+});
+
+test('restored acknowledged configuration enables natural replay after host reload but ordinary replies do not',async t=>{
+  for(const text of ['再来一局','再跑一轮实时']){
+    const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());
+    const result=await f.run('arena_start',{},f.agent('restored-'+text,{text}));
+    assert.equal(result.native_loop.armed,true);assert.deepEqual(f.runtimes[0].entry,entry);
+  }
+  for(const text of ['好的','知道了','确认','开始了吗？','什么时候开始？','准备好了吗？','为什么必须说开始？','他说“再来一局”','确认但先换个形象']){
+    const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());
+    const result=await f.run('arena_start',{},f.agent('not-replay-'+text,{text}));
+    assert.equal(result.native_loop.armed,false,text);assert.equal(f.runtimes.length,0,text);
+  }
+});
+
+test('persisted terminal notices consume a pre-reload request and require a genuinely later human request',async t=>{
+  const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());const a=f.agent('reloaded-consumed',{text:'再来一局'});
+  a.session.log.push({type:'user/message',seq:5,data:{source:{kind:'dsh-model-action',purpose:'arena-terminal'},content:[{type:'text',text:'服务器已确认本局结束'}]}});
+  await assert.rejects(f.run('arena_start',{},a),{code:'arena_human_authorization_required'});assert.equal(f.runtimes.length,0);
+  nextHumanTurn(a,'再跑一轮实时');assert.equal((await f.run('arena_start',{},a)).native_loop.armed,true);
+  assert.equal(f.runtimes.length,1);
+});
+
+test('changed configuration is reviewed by differences before a new natural confirmation',async t=>{
+  const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());const a=f.agent('change-after-confirmed',{text:'装备换成冲锋枪，再来一轮'});
+  assert.equal((await f.run('arena_start',{},a)).phase,'configuring');assert.equal(f.runtimes.length,0);
+  const changed={...entry,loadout_id:'smg'},proposal=await f.run('arena_prepare',changed,a);
+  assert.ok(proposal.dialogue.summary.includes('备战调整：装备：冲锋枪配置'));
+  assert.ok(!proposal.dialogue.summary.includes('昵称：'),'only changes are repeated');
+  nextHumanTurn(a,'行，就按这套打，多搜一些再撤离');
+  const result=await f.run('arena_start',{},a);
+  assert.equal(result.native_loop.armed,true);assert.deepEqual(f.runtimes[0].entry,changed);
+});
+
+test('unconfirmed preferences or removed catalog options never qualify for repeat entry',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('never-confirmed',{text:'再来一局'});
+  const opened=await f.run('arena_start',{},a);assert.equal(opened.phase,'configuring');
+  await f.run('arena_prepare',entry,a);nextHumanTurn(a,'这套装备多少钱？');await f.run('arena_start',{},a);
+  assert.equal(f.runtimes.length,0);
+  const g=fixture({}, {confirmedEntry:{...entry,loadout_id:'removed'}});t.after(()=>g.host.dispose());
+  const invalid=await g.run('arena_start',{},g.agent('removed',{text:'再来一局'}));
+  assert.equal(invalid.phase,'configuring');assert.equal(g.runtimes.length,0);
+});
+
+test('negative or injected replay requests do not start and concurrent real requests share one activation',async t=>{
+  const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());
+  for(const [text,source]of [['不要再来一局','user'],['再来一局','plugin']]){
+    await assert.rejects(f.run('arena_start',{},f.agent('blocked-'+source,{text,source})),{code:'arena_human_authorization_required'});
+  }
+  const a=f.agent('repeat-race',{text:'再跑一轮实时'});
+  await Promise.all([f.run('arena_start',{},a),f.run('arena_start',{},a)]);
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].entry,entry);
+});
+
+test('a stop while confirmed preference persistence is pending cannot be revived by the delayed write',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('pending-consent');
+  await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);
+  let release;f.clients[0].rememberGate=new Promise(resolve=>{release=resolve;});
+  nextHumanTurn(a,'好，按这套开始吧');const pending=f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a);
+  await flush();await f.run('arena_stop',{},a);release();
+  await assert.rejects(pending,{code:'arena_start_cancelled'});assert.equal(f.runtimes.length,0);
+});
+
+test('a new human refusal while persistence is pending cancels launch and an early turn-stopping hook remains safe',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('pending-human');
+  await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);
+  let release;f.clients[0].rememberGate=new Promise(resolve=>{release=resolve;});
+  nextHumanTurn(a,'就这套开始');const pending=f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a);
+  await flush();const stopping=f.emit('agent/turn-stopping',{agent:a,signal:a.controller.signal});
+  nextHumanTurn(a,'先不要开局');release();
+  await assert.rejects(pending,{code:'arena_human_authorization_required'});await stopping;
+  assert.equal(f.runtimes.length,0);
+});
+
+test('a local consent write failure before runtime start can retry the same human confirmation',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('consent-retry');
+  await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);
+  f.clients[0].rememberFailures=1;nextHumanTurn(a,'就这套开始，多搜一点');
+  await assert.rejects(f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a),{code:'store_write_failed'});
+  assert.equal(f.runtimes.length,0);assert.equal((await f.run('arena_status',{},a)).phase,'awaiting_confirmation');
+  const retried=await f.run('arena_start',{},a);
+  assert.equal(retried.native_loop.armed,true);assert.equal(f.runtimes.length,1);assert.equal(f.clients[0].remembered.length,2);
+});
+
+test('a pre-start scope mounting failure is retryable but a runtime-start failure never replays a possible attempt',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('scope-retry');
+  await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);nextHumanTurn(a,'确认开始');
+  const plugin=a.ctx.plugin;a.ctx.plugin=()=>{throw Object.assign(new Error('scope unavailable'),{code:'scope_unavailable'});};
+  await assert.rejects(f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a),{code:'scope_unavailable'});
+  assert.ok(f.runtimes.every(r=>!r.startOptions));a.ctx.plugin=plugin;
+  assert.equal((await f.run('arena_start',{},a)).native_loop.armed,true);
+  assert.equal(f.runtimes.filter(r=>r.startOptions).length,1);
+  const g=fixture({}, {confirmedEntry:entry});t.after(()=>g.host.dispose());const b=g.agent('started-failure',{text:'先显示配置'});
+  await g.run('arena_start',{},b);g.clients[0].runtimeStartError=Object.assign(new Error('transport lost'),{code:'network_error'});
+  nextHumanTurn(b,'再来一局');await assert.rejects(g.run('arena_start',{},b),{code:'network_error'});
+  await assert.rejects(g.run('arena_start',{},b,new AbortController().signal),{code:'arena_human_authorization_required'});
+  assert.equal(g.runtimes.length,1);
+});
+
+test('review-first requests show preparation and do not fast-start the saved configuration',async t=>{
+  for(const text of ['等我确认后再开始','先看看配置，再开始']){
+    const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());const a=f.agent('review-first-'+text,{text});
+    assert.equal((await f.run('arena_start',{},a)).native_loop.armed,false);assert.equal(f.runtimes.length,0);
+  }
+});
+
+test('a later human message during repeat lookup prevents the old request from launching',async t=>{
+  const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());const a=f.agent('later-human',{text:'先显示配置'});
+  await f.run('arena_start',{},a);let release;const client=f.clients[0],original=client.catalog.bind(client);
+  client.catalog=()=>new Promise(resolve=>{release=async()=>resolve(await original());});
+  nextHumanTurn(a,'再来一局');const pending=f.run('arena_start',{},a);await flush();
+  nextHumanTurn(a,'不要开始');release();
+  await assert.rejects(pending,{code:'arena_human_authorization_required'});assert.equal(f.runtimes.length,0);
+});
+
+test('a new human refusal during asynchronous scope mounting prevents the old request from starting a runtime',async t=>{
+  const f=fixture({}, {confirmedEntry:entry});t.after(()=>f.host.dispose());const a=f.agent('scope-human-window',{text:'再来一局'});
+  let release;const gate=new Promise(resolve=>{release=resolve;});const plugin=a.ctx.plugin;
+  a.ctx.plugin=definition=>{
+    const fiber=plugin(definition);
+    return {then(resolve,reject){return gate.then(()=>fiber).then(resolve,reject);},dispose(){return fiber.dispose();}};
+  };
+  const pending=f.run('arena_start',{},a);await flush();
+  assert.equal(f.runtimes.length,1);assert.equal(f.runtimes[0].startOptions,undefined);
+  nextHumanTurn(a,'先不要开始');assert.equal(a.controller.signal.aborted,false);
+  release();await assert.rejects(pending,{code:'arena_human_authorization_required'});
+  assert.equal(f.runtimes.filter(runtime=>runtime.startOptions).length,0);
 });
 
 test('a pre-existing server game is shown without queueing, arming or abandoning it',async t=>{
@@ -490,7 +670,7 @@ test('existing game stop requires current authentic explicit abandonment and doe
   assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
   assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
   const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
-  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.0');
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.1');
   assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
   nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
 });

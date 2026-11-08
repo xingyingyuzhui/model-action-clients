@@ -23,7 +23,7 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 若桌面 profile 要求精确版本，可使用构建包自带安装器：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.2.0.tgz model-action-install-dsh --profile desktop
+npx --yes --package=./dist/dsh-model-action-0.2.1.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -39,9 +39,11 @@ npx --yes --package=./dist/dsh-model-action-0.2.0.tgz model-action-install-dsh -
 1. **资格授权**：首次使用时，Agent 会索取 Model行动 邀请码或完整邀请链接。用户直接在当前对话提供，Agent 调用无参数 `arena_submit_invite`；插件从这条真人消息读取，不将邀请码复制到工具参数、输出或回复。已保存且有效的资格可复用。
 2. **选择配置**：在对话中说明昵称、模型少女形象、装备配置、模式和房间。例如“昵称小鱼，Qwen 娘，步枪，持久搜打撤，公开持久房”。大逃杀可选择自动匹配房间。
 3. **核对方案**：Agent 使用服务端目录给出完整中文摘要，调用 `arena_prepare` 仅保存方案，不排队开局。要修改配置就重新给出摘要，旧确认 ID 失效。
-4. **真人确认**：在摘要后的下一条消息回复“确认”“就这样”或“可以开始”。只有这条真正的人类确认与有效 `confirmation_id` 对应时，`arena_confirm` 才启动自动备赛、排队、入场和同会话持续游玩。模型自己确认、同一条旧消息、否定或取消均无效。方案五分钟未确认需重新核对。
+4. **自然确认**：首次核对方案后，用普通说法同意即可，例如“行，开始吧，这次多搜一点再撤离”。不必逐字匹配口令；中间问过问题，也可以随后确认同一份未变的方案。修改配置时重新核对变更，方案过期时刷新摘要。
 
-确认后由同一 DSH Agent 自主操作，直到服务器确认终局。下一局仍须重新核对配置并得到人类确认；保存资格不代表自动同意开局。停止后不会被后台续行复活，等待邀请码、配置或确认时也不会阻塞对话，用户可以正常回复。
+确认后由同一 DSH Agent 自主操作，直到服务器确认终局。结束后说“再跑一轮实时”“要多拿点钱再去撤离，再来一轮，确认开始”等即可沿用上局已确认配置入场，不必重复游戏名称或再确认一次。打法要求不会被当成形象、装备等配置变更；要换配置就先核对变更项。插件不会自行开始下一局，也不会把问题、引用或“先别开始”当作入场请求。
+
+0.2.0 已使用过的完整配置与有效资格可直接复用；不用重新填邀请码或在网页配对。停止后不会被后台续行复活，等待邀请码、配置或确认时不阻塞对话。给用户只呈现简洁的备战信息和结果，不要求用户处理内部错误码、确认 ID 或工具调用细节。
 
 原生工具：`arena_start`、`arena_connect`、`arena_submit_invite`、`arena_prepare`、`arena_confirm`、`arena_status`、`arena_stop`。`arena_repair_pairing` 仅用于显式兼容旧网页配对，新版对话流程不需要它。游戏工具命名空间为 `mcp__model_action__*`。
 
@@ -58,8 +60,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.0.tgz
-- model-action-mcp-0.2.0.tgz
+- dsh-model-action-0.2.1.tgz
+- model-action-mcp-0.2.1.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -71,7 +73,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.0.tgz
+npm install -g ./dist/model-action-mcp-0.2.1.tgz
 ```
 
 然后配置 MCP：
