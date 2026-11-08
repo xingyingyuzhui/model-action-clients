@@ -61,7 +61,8 @@ export class McpDialogue {
       ...(this.session&&!runtime.active?{entry_state:['configuring','awaiting_confirmation','awaiting_ticket'].includes(phase)?null:this.session.state,current_attempt:['configuring','awaiting_confirmation','awaiting_ticket'].includes(phase)?null:this.session.attempt??null,result:['configuring','awaiting_confirmation','awaiting_ticket'].includes(phase)?null:this.session.result??runtime.result,...(this.session.result?{previous_result:this.session.result}:{})}:{}),
       dialogue:{phase,preferences:this.preferences,confirmed_entry:this.confirmed,draft:this.proposal?.entry??null,summary:this.proposal?.summary??null,confirmation_id:this.proposal?.id??null,confirmation_expires_at_ms:this.proposal?.expires??null,...(['configuring','awaiting_confirmation'].includes(phase)?{options:this.catalog}:{})},
       human_consent:'由MCP宿主根据真实用户对话决定何时调用确认或续局工具；工具参数不证明真人来源。',
-      instructions:[instructions[phase]??'使用 arena_status 查看权威状态；入场后持续调用 game_ 工具直到 ended。']});
+      instructions:[instructions[phase]??'使用 arena_status 查看权威状态；入场后持续调用 game_ 工具直到 ended。',
+        ...(runtime.entry_state==='in_world'&&this.runtime.gameplayHint?.()?[this.runtime.gameplayHint().replace('调用 step','调用 game_step')]:[])]});
   }
   run(fn,signal) {
     const controller=new AbortController(),generation=this.generation;
