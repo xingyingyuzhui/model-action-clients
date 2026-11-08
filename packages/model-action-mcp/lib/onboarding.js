@@ -4,15 +4,15 @@ export function onboardingView(view = {}, {serverUrl = 'https://xingying.dev', c
     const {pairing,pairing_code,lobby_url,...safe}=view;
     const phase=view.phase??'idle';
     const instructions={
-      idle:['Model行动插件已加载。用户说“开启 Model行动”后，只进入对话准备，不会默认开局。'],
+      idle:['Model行动插件已加载。通过对话开始备战，不要求固定口令。首次核对配置；用户要求再来一局时，调用 arena_start 复用已确认配置。'],
       awaiting_ticket:['请用户直接在本轮对话提供 Model行动 邀请码或完整邀请链接，然后调用无参数 arena_submit_invite。不要回显、复述邀请码，不需要打开网页。'],
       access_error:['资格连接暂未完成。按 host_error 的安全错误码报告原因；网络故障可重试 arena_start 或 arena_submit_invite，不要要求用户重复公开已保存的凭证，不要读取私有文件。'],
-      configuring:['在对话中收集昵称、模型少女形象、装备、模式和房间。根据返回的安全 options 展示可选项；大逃杀可自动匹配房间。调用 arena_prepare 只生成方案，不开局。'],
-      awaiting_confirmation:[`备赛方案：${view.dialogue?.summary??'请先补齐配置。'}`, '请用户下一条消息回复“确认”“就这样”或“可以开始”，也可说明修改。必须等这条真正人类回复后再调用 arena_confirm；模型自己不能确认。'],
+      configuring:['首次在对话中核对昵称、形象、装备、模式和房间；已有 preferences 时沿用，仅询问缺少或要修改的项目。根据安全 options 选择，调用 arena_prepare 出简短摘要。不要重复收集已有信息。'],
+      awaiting_confirmation:[`备赛方案：${view.dialogue?.summary??'请先补齐配置。'}`, '真人用户用自然语言同意即可调用 arena_confirm，不要求固定措辞或必须紧接下一条。问问题时先回答；方案不变不必重新生成。若用户改配置，先重新核对变更。模型自己不能确认。只向用户说明方案，不展示确认ID、正则或调用过程。'],
       starting:['用户已确认完整备赛方案，插件开始自动准备、排队和入场。'],
       existing_game:['服务器显示此身份已有在进行或候场的对局。未替用户重排或默认接管；使用 arena_status 查看状态，必要时由用户明确要求退出后重新备赛。'],
-      stopped:['Model行动已停止，未确认方案已取消。若需要开始，请明确说“开启 Model行动”，重新核对配置并确认。'],
-      ended:['服务器已确认本局结束。只报告真实结算，不自动开始下一局；下一局仍需重新展示配置并得到人类确认。'],
+      stopped:['Model行动已停止，未确认方案已取消。用户要求继续或再来一局时，调用 arena_start；可沿用已确认配置，变更项才重新核对。'],
+      ended:['服务器已确认本局结束。只报告真实结算，不自动开始下一局；等用户要求再来一局后，调用 arena_start 沿用已确认配置，不再重复索要游戏名或二次确认；不要自行连开。'],
     };
     return {...safe,pairing:null,plugin_loaded:true,game_name:'Model行动',browser_required:false,
       instructions:instructions[phase]??[view.native_loop?.armed?'当前已按用户确认运行，持续使用游戏工具直到服务器确认终局。':'请使用 arena_status 查看当前对话准备状态。'],

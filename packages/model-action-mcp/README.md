@@ -9,7 +9,7 @@ Model行动的标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户�
 从仓库运行 `npm run pack`，或在 GitHub Actions 下载构建产物。安装标准 npm 格式包，不需要发布到 Registry：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.0.tgz
+npm install -g ./dist/model-action-mcp-0.2.1.tgz
 model-action-mcp --help
 ```
 

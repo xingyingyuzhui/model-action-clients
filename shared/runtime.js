@@ -46,7 +46,7 @@ function toolData(result) {
 export class ArenaRuntime {
   constructor({client,transport,onWake=()=>{},onTerminal=()=>{},onState=()=>{},clock=Date.now,
     heartbeatMs=5000,pollMs=2000,maxBackoffMs=30000,gameTimeoutMs=70000,
-    label='Model行动 client',version='0.2.0',model,fetcher=globalThis.fetch}={}) {
+    label='Model行动 client',version='0.2.1',model,fetcher=globalThis.fetch}={}) {
     if(!client||typeof client.session!=='function'||typeof client.publicState!=='function'||
       [onWake,onTerminal,onState,clock].some(fn=>typeof fn!=='function')||
       [heartbeatMs,pollMs,maxBackoffMs,gameTimeoutMs].some(n=>!Number.isSafeInteger(n)||n<1)||
