@@ -85,7 +85,7 @@ test('a browser-era lease can retain conversational preferences only after curre
 });
 test('rejected legacy lease verification cannot manufacture preference consent',async()=>{
  const f=fixture();const value=await f.store.read();delete value.native_access;await f.store.write(value);
- f.client.fetcher=async()=>new Response(JSON.stringify({schema_version:2,error:{code:'client_unauthorized'}}),{status:401});
+ f.client.fetcher=async url=>new URL(url).pathname==='/lobby/v2/access'?new Response(JSON.stringify({schema_version:2,admission_mode:'invite',invite_required:true}),{status:200}):new Response(JSON.stringify({schema_version:2,error:{code:'client_unauthorized'}}),{status:401});
  await assert.rejects(f.client.connectNative(),{code:'invite_required'});
  const after=await f.store.read();assert.equal(after.control,null);assert.equal(after.native_verified_control,undefined);
  assert.equal((await f.client.publicState()).confirmed_entry,null);

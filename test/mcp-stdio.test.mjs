@@ -29,6 +29,7 @@ async function fixture(t) {
       res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ schema_version: 2, error: { code: 'unauthorized' } })); return;
     }
     switch (req.url) {
+      case '/lobby/v2/access':value={enabled:true,admission_mode:'invite',invite_required:true};break;
       case '/lobby/v2/catalog':value={catalog_revision:'mcp-1',appearance:{character:[{id:'default',name:'默认形象',enabled:true},{id:'qwen',name:'Qwen 娘',enabled:true},{id:'deepseek',name:'DeepSeek 娘',enabled:true}]},loadouts:[{id:'rifle',name:'步枪标准配置',enabled:true},{id:'smg',name:'冲锋枪配置',enabled:true}],mode_ids:['extraction','battle_royale']};break;
       case '/client/v2/access/connect':
         if(body.ticket!==invitation&&body.access_token!==access){res.writeHead(403,{'content-type':'application/json'});res.end(JSON.stringify({schema_version:2,error:{code:'invite_invalid'}}));return;}

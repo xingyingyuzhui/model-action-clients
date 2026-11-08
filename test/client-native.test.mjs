@@ -10,6 +10,7 @@ function fixture({loseConnect=false,losePrepare=false,failSave=false,loseRecover
  const session=()=>({state,connection:{state:'connected'},public_agent_id:null});
  const fetcher=async(url,init)=>{
   const route=new URL(url).pathname,b=init.body?JSON.parse(init.body):null;calls.push({route,body:b,key:init.headers['idempotency-key'],credentials:init.credentials,headers:init.headers});
+  if(route==='/lobby/v2/access')return json({admission_mode:'invite',invite_required:true,enabled:true});
   if(route==='/lobby/v2/catalog')return json({catalog_revision:'test-1',appearance:{character:[{id:'qwen',name:'Qwen 娘',enabled:true}]},loadouts:[{id:'rifle',name:'步枪标准配置',enabled:true}],mode_ids:['extraction','battle_royale']});
   if(route==='/client/v2/access/connect'){
    const pending=(await store.read()).pending_native_connect;assert.equal(pending.key,init.headers['idempotency-key']);assert.deepEqual(pending.body,b);valid=true;
@@ -44,10 +45,10 @@ test('failed private save leaves the same pending native exchange recoverable wi
  const f=fixture({failSave:true});await assert.rejects(f.client.connectNative({ticket:TICKET}),{code:'store_write_failed'});const saved=await f.store.read();assert.equal(saved.control,null);assert.ok(saved.pending_native_connect);
  await f.client.connectNative();assert.equal(f.calls.filter(c=>c.route.endsWith('/access/connect')).at(-1).key,saved.pending_native_connect.key);
 });
-test('invitation URLs cannot redirect credentials to another origin and missing qualification fails without network',async()=>{
- const f=fixture();await assert.rejects(f.client.connectNative(),{code:'invite_required'});assert.equal(f.calls.length,0);
+test('invitation URLs cannot redirect credentials to another origin and missing qualification checks public policy without mutating admission',async()=>{
+ const f=fixture();await assert.rejects(f.client.connectNative(),{code:'invite_required'});assert.deepEqual(f.calls.map(c=>c.route),['/lobby/v2/access']);
  for(const ticket of ['https://evil.test/agent-arena/lobby/#invite='+TICKET,'https://arena.test/agent-arena/lobby/?ticket=x#invite='+TICKET,'https://arena.test/agent-arena/lobby/#invite='+TICKET+'&invite='+TICKET])await assert.rejects(f.client.connectNative({ticket}),{code:'invalid_invite_input'});
- assert.equal(f.calls.length,0);
+ assert.deepEqual(f.calls.map(c=>c.route),['/lobby/v2/access']);
 });
 test('native reconnect restores a saved profile before preparing a new one without exposing its recovery proof',async()=>{
  const f=fixture();await f.client.connectNative({ticket:TICKET});let disk=await f.store.read();disk.profiles.agent_recent={public_agent_id:'agent_recent',acked:true,recovery_secret:RECOVERY,name:'小鱼',appearance:{character:'qwen'}};disk.last_profile_id='agent_recent';await f.store.write(disk);

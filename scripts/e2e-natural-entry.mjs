@@ -16,7 +16,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const args=process.argv.slice(2);if(args.length!==2||args[0]!=='--game-dir')throw new Error('usage: --game-dir /absolute/agent-extraction-arena');
+const args=process.argv.slice(2);const publicMode=args[2]==='--open';if(![2,3].includes(args.length)||args[0]!=='--game-dir'||args.length===3&&!publicMode)throw new Error('usage: --game-dir /absolute/agent-extraction-arena');
 const GAME=path.resolve(args[1]);
 const [{RoomManager},{ArenaLobby},{ProfileStore},{RankingStore},{BetaAccessStore},{createArenaServer},{listen}]=await Promise.all(['rooms/manager.js','arena/lobby.js','profiles/store.js','rankings/store.js','beta/store.js','arena/http.js','server.js'].map(name=>import(pathToFileURL(path.join(GAME,'src',name)))));
 const CLIENT=ROOT,HOST=process.env.MODEL_ACTION_DSH_MODULES??'/Applications/DeepSeek Harness.app/Contents/Resources/app/dsh/node_modules';
@@ -55,8 +55,8 @@ export function apply(ctx){
 `;
 try{
  fs.mkdirSync(workspace,{recursive:true,mode:0o700});fs.mkdirSync(profile,{recursive:true,mode:0o700});
- const access=new BetaAccessStore({dir:path.join(temp,'beta')});ticket=access.createInvites({count:1})[0].ticket;
- fs.writeFileSync(inputFile,JSON.stringify(['我想试试这个游戏',ticket,'昵称：对话验收；形象：DeepSeek娘（deepseek）；装备：rifle；模式：extraction；房间：public-1','行，就按这套开始吧，多拿点钱再去撤离','刚才赚了多少？先别开始','要多拿点钱再去撤离，再来一轮，确认开始']),{mode:0o600});
+ const access=new BetaAccessStore({dir:path.join(temp,'beta')});if(publicMode){access.createInvites({count:20});access.setAdmissionMode('open');}ticket=publicMode?null:access.createInvites({count:1})[0].ticket;
+ fs.writeFileSync(inputFile,JSON.stringify(['我想试试这个游戏',publicMode?'当前公开，直接备战':ticket,'昵称：对话验收；形象：DeepSeek娘（deepseek）；装备：rifle；模式：extraction；房间：public-1','行，就按这套开始吧，多拿点钱再去撤离','刚才赚了多少？先别开始','要多拿点钱再去撤离，再来一轮，确认开始']),{mode:0o600});
  manager=new RoomManager({dataDir:path.join(temp,'rooms'),invite:'isolated-unused-legacy-invite',seed:'conversation-acceptance',world:{npcTarget:0,airdrops:false}});await manager.start();
  lobby=new ArenaLobby(manager,{access,invite:'isolated-unused-legacy-invite',profiles:new ProfileStore(path.join(temp,'profiles')),rankings:new RankingStore(path.join(temp,'rankings'))});
  server=createArenaServer(lobby);server.prependListener('request',req=>httpRoutes.push({method:req.method,path:new URL(req.url,'http://local').pathname,stage:fs.existsSync(progress)?JSON.parse(fs.readFileSync(progress)).stage:0}));
@@ -69,8 +69,8 @@ try{
    const found=history.join('\n').match(/confirmation_id["\\\s:]+([0-9a-f]{64})/);if(found)confirmationId=found[1];
    let action,parameters={},message;
    if(stage===1&&count===0)action='arena_start';
-   else if(stage===1)message='请在本轮对话发送邀请码或完整邀请链接。';
-   else if(stage===2&&count===0)action='arena_submit_invite';
+   else if(stage===1)message=publicMode?'当前公开开放，无需邀请码，请选择配置。':'请在本轮对话发送邀请码或完整邀请链接。';
+   else if(stage===2&&count===0&&!publicMode)action='arena_submit_invite';
    else if(stage===2)message='请提供昵称、模型少女形象、装备、模式、房间五项。';
    else if(stage===3&&count===0){action='arena_prepare';parameters={name:'对话验收',character_id:'deepseek',loadout_id:'rifle',mode_id:'extraction',room_id:'public-1'};}
    else if(stage===3)message='备赛摘要：昵称对话验收；DeepSeek娘；rifle装备；持久搜打撤；public-1。请确认。';
@@ -82,7 +82,7 @@ try{
    else if([4,6].includes(stage)&&!steps.has(stage)&&names.includes('mcp__model_action__step')){steps.add(stage);step=true;action='mcp__model_action__step';parameters={input:{right:true,hold_ms:100},client_cmd_id:'natural-step-'+stage};}
    else if([4,6].includes(stage)&&!abandons.has(stage)&&names.includes('mcp__model_action__abandon')){abandons.add(stage);abandon=true;action='mcp__model_action__abandon';}
    else message='等待服务端确认本局结果。';
-   calls.push({call:modelCalls,stage,tools:names,action:action??'final',...(action==='arena_submit_invite'?{argument_keys:Object.keys(parameters)}:{}),invite_in_model_request:raw.includes(ticket),invite_in_tool_history:history.some(text=>text.includes(ticket)),private_credentials_in_tool_history:history.some(text=>/model_beta_(?:invite_)?[A-Za-z0-9_-]{43}|aea_profile_[A-Za-z0-9_-]{32,}|[\"'](?:access_token|control_token|game_token|recovery_secret|device_secret)[\"']\s*:\s*[\"'][A-Za-z0-9_-]{16,}/.test(text.replace(/\\\"/g,'\"')))});
+   calls.push({call:modelCalls,stage,tools:names,action:action??'final',...(action==='arena_submit_invite'?{argument_keys:Object.keys(parameters)}:{}),invite_in_model_request:!!ticket&&raw.includes(ticket),invite_in_tool_history:history.some(text=>!!ticket&&text.includes(ticket)),private_credentials_in_tool_history:history.some(text=>/model_beta_(?:invite_)?[A-Za-z0-9_-]{43}|aea_profile_[A-Za-z0-9_-]{32,}|[\"'](?:access_token|control_token|game_token|recovery_secret|device_secret)[\"']\s*:\s*[\"'][A-Za-z0-9_-]{16,}/.test(text.replace(/\\\"/g,'\"')))});
    const delta=action?{role:'assistant',content:null,tool_calls:[{index:0,id:'fixture-'+modelCalls,type:'function',function:{name:action,arguments:JSON.stringify(parameters)}}]}:{role:'assistant',content:message};
    const chunk=(d,f)=>'data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',created:0,model:request.model,choices:[{index:0,delta:d,finish_reason:f}]})+'\n\n';
    res.writeHead(200,{'content-type':'text/event-stream'});res.end(chunk(delta,null)+chunk({},action?'tool_calls':'stop')+'data: [DONE]\n\n');
@@ -105,7 +105,7 @@ try{
  for(let n=0;n<20&&manager.room('public-1').players_active;n++)await wait(100);
  check('official DSH 0.2.2-rc.1 completes six persistent human rounds',exit===0&&output.includes('"round":6'));
  check('invitation requested before this turn ends',calls.some(c=>c.stage===1&&c.action==='arena_start')&&calls.some(c=>c.stage===1&&c.action==='final'));
- check('human invitation submitted with no tool arguments',calls.some(c=>c.stage===2&&c.action==='arena_submit_invite'&&c.argument_keys.length===0));
+ check(publicMode?'open native DSH never requests an invitation submission':'human invitation submitted with no tool arguments',publicMode?!calls.some(c=>c.action==='arena_submit_invite'):calls.some(c=>c.stage===2&&c.action==='arena_submit_invite'&&c.argument_keys.length===0));
  check('first configuration summarized before natural human confirmation',calls.some(c=>c.stage===3&&c.action==='arena_prepare')&&calls.some(c=>c.stage===3&&c.action==='final')&&calls.some(c=>c.stage===4&&c.action==='arena_confirm'));
  check('natural first confirmation and a single repeat request both run to real terminal',earlyFinal&&steps.size===2&&abandons.size===2);
  check('a second real queue request is issued only by the new human request',httpRoutes.some(r=>r.stage===4&&r.path==='/client/v2/queue')&&httpRoutes.some(r=>r.stage===6&&r.path==='/client/v2/queue'));

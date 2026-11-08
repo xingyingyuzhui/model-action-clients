@@ -6,6 +6,7 @@ const clone = value => structuredClone(value);
 const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,200}$/.test(value);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const states = new Set(['preparing','ready','queued','offered','waiting','countdown','in_world','ended']);
+const accessFailure = cause => [401,403,410].includes(cause?.status) && /^(?:beta_(?:access|invite)_(?:invalid|expired|revoked|required)|invite_required|public_access_closed|client_unauthorized|unauthorized)$/.test(cause?.code??'');
 function origin(value) {
   let url;
   try { url = new URL(value); } catch { throw error('invalid_server_url'); }
@@ -129,7 +130,14 @@ export class ArenaClient {
     return {schema_version:2,catalog_revision:data.catalog_revision,appearance:{character:data.appearance.character.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,cosmetic_only:true}))},
       loadouts:data.loadouts.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,weapon:p.weapon,equipment:p.equipment,weight_kg:p.weight_kg,total_value:p.total_value})),mode_ids:data.mode_ids};
   }
-  async connectNative({ticket,label='Model行动 client',version='0.2.2'}={}){
+  async admissionPolicy(){
+    const policy=await this.request('/lobby/v2/access',{method:'GET'});
+    // Old enabled:false deployments still require their private legacy invite.
+    // Only an explicit, coherent open-policy response authorizes bootstrap.
+    return {admission_mode:policy.enabled===true&&policy.admission_mode==='open'&&policy.invite_required===false?'open':'invite',
+      invite_required:!(policy.enabled===true&&policy.admission_mode==='open'&&policy.invite_required===false)};
+  }
+  async connectNative({ticket,label='Model行动 client',version='0.2.3'}={}){
     requireText(label,60);requireText(version,40);
     if(ticket!==undefined){
       if(typeof ticket!=='string')throw error('invalid_invite_input');
@@ -144,6 +152,7 @@ export class ArenaClient {
     }
     return this.exclusive(async()=>{
       const value=await this.load();
+      let freshGuest=false;
       if(typeof this.store.readNativeMigration==='function'){
         const ids=Object.values(value.profiles).filter(p=>p.acked).map(p=>p.public_agent_id);
         const migration=await this.store.readNativeMigration(this.serverUrl,ids);
@@ -154,46 +163,76 @@ export class ArenaClient {
         try{
           const session=await this.request('/client/v2/session',{method:'GET',bearer:this.control(value)});
           if(!states.has(session.state))throw error('invalid_response');
-          const restored=await this.restoreNativeProfile(value,session);
+          let replaceGuest=false;
+          if(value.native_access?.grant?.kind==='open'&&session.state!=='in_world'&&(await this.admissionPolicy()).invite_required){
+            // Keeping the old lease permits reading a finished result, but does
+            // not make this guest eligible to prepare another match.
+            if(ticket===undefined)throw error('invite_required');
+            if(!['preparing','ready','ended'].includes(session.state))throw error('previous_attempt_not_cleared');
+            replaceGuest=true;
+          }
+          if(replaceGuest){this.clearConnection(value);await this.store.write(value);}else{
+          const restored=await this.restoreNativeProfile(value,session,{strict:value.native_access?.grant?.kind==='open'});
           // Old stdio clients may still have a valid browser-era lease without
           // a persistent native grant. Bind preference consent only after the
           // current server actually validates this exact lease.
           value.native_verified_control=createHash('sha256').update(value.control.token).digest('hex');
           await this.store.write(value);
           return {state:'connected',grant:value.native_access?.grant??null,session:restored};
-        }catch(cause){if(cause.status!==401)throw cause;this.clearConnection(value);await this.store.write(value);}
+          }
+        }catch(cause){
+          if(!accessFailure(cause))throw cause;
+          if(cause.status!==401){
+            if(ticket===undefined){if((await this.admissionPolicy()).invite_required)throw cause;freshGuest=true;}
+          }
+          this.clearConnection(value);await this.store.write(value);
+        }
       }
       let pending=value.pending_native_connect;
-      if(pending&&ticket!==undefined&&pending.body.ticket!==ticket)throw error('pending_native_connection_conflict');
+      if(pending&&ticket!==undefined&&pending.body.ticket!==ticket){
+        if(pending.body.ticket===undefined&&pending.body.access_token===undefined&&(await this.admissionPolicy()).invite_required){
+          value.pending_native_connect=null;pending=null;await this.store.write(value);
+        }else throw error('pending_native_connection_conflict');
+      }
       if(!pending){
-        const proof=ticket??value.native_access?.token??value.native_legacy_ticket;
-        if(!proof)throw error('invite_required');
-        const body={...(ticket!==undefined||!value.native_access?.token?{ticket:proof}:{access_token:proof}),label,version,protocol_version:1};
+        const proof=freshGuest?undefined:ticket??value.native_access?.token??value.native_legacy_ticket;
+        if(!proof&&(await this.admissionPolicy()).invite_required)throw error('invite_required');
+        const body={...(proof===undefined?{}:ticket!==undefined||!value.native_access?.token?{ticket:proof}:{access_token:proof}),label,version,protocol_version:1};
         pending={key:randomUUID(),body};value.pending_native_connect=pending;await this.store.write(value);
       }
       let reply;
       try{reply=await this.request('/client/v2/access/connect',{body:pending.body,key:pending.key});}
       catch(cause){
         if([400,401,403,404,409,410,422].includes(cause.status)){value.pending_native_connect=null;await this.store.write(value);}
-        throw cause;
+        // A saved, now-expired qualification may be replaced by a public guest
+        // only after the server explicitly advertises open admission. Recovery
+        // proofs are retained, and profile/administration errors never enter here.
+        if(ticket===undefined&&pending.body.access_token&&accessFailure(cause)&&!(await this.admissionPolicy()).invite_required){
+          this.clearConnection(value);
+          pending={key:randomUUID(),body:{label,version,protocol_version:1}};
+          value.pending_native_connect=pending;await this.store.write(value);
+          try{reply=await this.request('/client/v2/access/connect',{body:pending.body,key:pending.key});}
+          catch(fallback){if([400,401,403,404,409,410,422].includes(fallback.status)){value.pending_native_connect=null;await this.store.write(value);}throw fallback;}
+        }else throw cause;
       }
       if(!token(reply.control_token)||!(reply.access_token===null||token(reply.access_token))||!states.has(reply.session?.state))throw error('invalid_response');
+      if(reply.access_token===null&&pending.body.ticket===undefined)throw error('invalid_response');
       if(reply.access_token!==null&&(!identifier(reply.grant?.id)||!Number.isSafeInteger(reply.grant?.expires_at_ms)||reply.grant.state!=='active'))throw error('invalid_response');
       value.control={token:reply.control_token,acked:true};value.pairing=null;
-      value.native_access=reply.access_token===null?null:{token:reply.access_token,grant:{id:reply.grant.id,expires_at_ms:reply.grant.expires_at_ms,state:reply.grant.state,max_concurrent_agents:reply.grant.max_concurrent_agents??1}};
+      value.native_access=reply.access_token===null?null:{token:reply.access_token,grant:{id:reply.grant.id,expires_at_ms:reply.grant.expires_at_ms,state:reply.grant.state,max_concurrent_agents:reply.grant.max_concurrent_agents??1,...(reply.grant.kind==='open'?{kind:'open'}:{})}};
       if(reply.access_token===null)value.native_legacy_ticket=pending.body.ticket??value.native_legacy_ticket;
       else delete value.native_legacy_ticket;
       value.pending_native_connect=null;await this.store.write(value);
-      return {state:'connected',grant:value.native_access?.grant??null,session:await this.restoreNativeProfile(value,reply.session)};
+      return {state:'connected',grant:value.native_access?.grant??null,session:await this.restoreNativeProfile(value,reply.session,{strict:value.native_access?.grant?.kind==='open'})};
     });
   }
-  async restoreNativeProfile(value,session){
+  async restoreNativeProfile(value,session,{strict=false}={}){
     const preferred=value.profiles[value.last_profile_id];
     const recent=preferred?.acked&&!preferred.unavailable?preferred:Object.values(value.profiles).filter(p=>p.acked&&!p.unavailable).at(-1);
     if(session.state==='preparing'&&!session.public_agent_id&&recent?.acked&&token(recent.recovery_secret)){
       try{return await this.request('/client/v2/profile/recover',{bearer:this.control(value),body:{public_agent_id:recent.public_agent_id,recovery_secret:recent.recovery_secret}});}
       catch(cause){
-        if(!['agent_deleted','invalid_profile_proof','profile_not_found'].includes(cause.code))throw cause;
+        if(strict||!['agent_deleted','invalid_profile_proof','profile_not_found'].includes(cause.code))throw cause;
         recent.unavailable=true;await this.store.write(value);
       }
     }
