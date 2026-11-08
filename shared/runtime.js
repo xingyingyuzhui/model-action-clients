@@ -43,6 +43,11 @@ function toolData(result) {
   try{return JSON.parse(text);}catch{return null;}
 }
 
+// Gameplay advice for the model. Only parameters the server's own step schema
+// declares are suggested, so an older server never receives unknown fields.
+export const EARLY_RETURN_TIP='调用 step 时建议 hold_ms 设为 1000，同时带 return_after_ms 300~500：观察会提前返回，按键继续生效，角色边走你边想下一步，不会原地停顿。世界不会等你，决策越快、越简短，拿到的信息越新；每一步以最新观察为准，不必回顾很早以前的观察。';
+export function supportsEarlyReturn(tools){return Array.isArray(tools)&&tools.some(tool=>tool?.name==='step'&&!!tool.inputSchema?.properties?.return_after_ms);}
+
 export class ArenaRuntime {
   constructor({client,transport,onWake=()=>{},onTerminal=()=>{},onState=()=>{},clock=Date.now,
     heartbeatMs=5000,pollMs=2000,maxBackoffMs=30000,gameTimeoutMs=70000,
@@ -275,6 +280,7 @@ export class ArenaRuntime {
     }
     return clone(this.tools);
   }
+  gameplayHint(){return supportsEarlyReturn(this.tools)?EARLY_RETURN_TIP:null;}
   async callGame(name,args={},signal) {
     if(this.view.entry_state!=='in_world')throw error('attempt_not_in_world');
     if(typeof name!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(name)||!args||typeof args!=='object'||Array.isArray(args))throw error('invalid_tool_call');

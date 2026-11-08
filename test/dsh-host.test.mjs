@@ -48,6 +48,7 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
     }
     async refresh() { return this.state(); }
     async listGameTools() { return [{ name: 'observe', description: 'Authoritative game view', inputSchema: { type: 'object', properties: {} } }]; }
+    gameplayHint() { return this.hint ?? null; }
     async callGame(name, args, signal) { this.calls.push({ name, args, signal }); return { content: [{ type: 'text', text: '{"ok":true}' }] }; }
     async stop(reason, options) {
       if (this.startOptions?.autoEnter === false) {
@@ -697,4 +698,15 @@ test('fresh DSH clients discover public admission without a ticket and still wai
  assert.equal(view.phase,'configuring');assert.equal(view.connected,true);assert.equal(view.native_loop.armed,false);
  assert.equal(f.clients[0].nativeCalls.length,1);assert.equal(f.clients[0].nativeCalls[0].ticket,undefined);
  assert.equal(f.runtimes.length,0);
+});
+
+test('continuation message suggests early step return only when the server step tool supports it', async t => {
+  const f = fixture(); t.after(() => f.host.dispose());
+  const a = f.agent('hinted'), b = f.agent('plain');
+  await beginGame(f, a); await beginGame(f, b);
+  f.runtimes[0].hint = 'EARLY-RETURN-TIP';
+  f.runtimes[0].enter(); f.runtimes[1].enter(); await flush();
+  assert.ok(a.injections[0].content[0].text.includes('EARLY-RETURN-TIP'));
+  assert.ok(!b.injections[0].content[0].text.includes('return_after_ms'));
+  assert.ok(b.injections[0].content[0].text.includes('输出总结不等于本局结束'));
 });

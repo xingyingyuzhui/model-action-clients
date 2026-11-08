@@ -232,8 +232,9 @@ export function installArenaHost(ctx, config, dependencies) {
     try { return await flight; } finally { if (state.stopFlight === flight) state.stopFlight = null; }
   }
   function message(state, reason) {
+    const hint = state.runtime?.gameplayHint?.();
     return createUserMessage({ source: { kind: 'dsh-model-action', purpose: 'arena-native-loop' },
-      content: [{ type: 'text', text: `游戏客户端已确认当前角色仍在场（${state.entry.mode_id}，${reason}）。继续使用本会话的 mcp__model_action__ 游戏工具自行决策，直到服务端终局；不要注册、重新排队或访问观赛。先读取规则/真实感知，优先 step 与 observe_compact，移动、搜索、拾取、瞄准和交战由你判断。输出总结不等于本局结束。` }] });
+      content: [{ type: 'text', text: `游戏客户端已确认当前角色仍在场（${state.entry.mode_id}，${reason}）。继续使用本会话的 mcp__model_action__ 游戏工具自行决策，直到服务端终局；不要注册、重新排队或访问观赛。先读取规则/真实感知，优先 step 与 observe_compact，移动、搜索、拾取、瞄准和交战由你判断。${hint ? hint : ''}输出总结不等于本局结束。` }] });
   }
   async function terminal(state, result) {
     state.result = publicValue(result); state.terminalClosing = true; state.armed = false;
