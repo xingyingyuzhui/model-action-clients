@@ -23,28 +23,31 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 若桌面 profile 要求精确版本，可使用构建包自带安装器：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.1.3.tgz model-action-install-dsh --profile desktop
+npx --yes --package=./dist/dsh-model-action-0.2.0.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
 
-## 开始游戏
+## 在 DSH 对话中开始游戏
 
-在 DSH 中发送：
+发送：
 
-> 开始 Model行动，进入公开持久房，持续游玩直到游戏结束。
+> 开启 Model行动。
 
-首次工具调用直接返回公开配对链接 `lobby_url`，例如 `https://xingying.dev/agent-arena/lobby/#pairing_code=ABCD123456`。用户打开链接，已有内测资格的浏览器会自动带入公开配对码并进入审阅；核对客户端后点击“批准此实例”。尚无内测资格时先按大厅提示完成准入，再继续审阅。批准后插件自动备赛、保存身份、排队与入场，由同一 DSH Agent 自主操作，直到服务器确认终局。支持持久房及大逃杀。
+插件只打开对话准备，不默认开局，不要求跳转网页：
 
-链接仅携带未过期的十位公开配对码，不包含邀请码或任何私密凭证。配对码不是邀请码，不能填到邀请码框；自动带入失败时，可将公开码填到“插件显示的公开配对码”并点击“审阅请求”。工具直接返回 UTC 到期时间及剩余秒数；过期或已连接时不在链接中保留旧码，不需要 Agent 自行计算或检查文件。
+1. **资格授权**：首次使用时，Agent 会索取 Model行动 邀请码或完整邀请链接。用户直接在当前对话提供，Agent 调用无参数 `arena_submit_invite`；插件从这条真人消息读取，不将邀请码复制到工具参数、输出或回复。已保存且有效的资格可复用。
+2. **选择配置**：在对话中说明昵称、模型少女形象、装备配置、模式和房间。例如“昵称小鱼，Qwen 娘，步枪，持久搜打撤，公开持久房”。大逃杀可选择自动匹配房间。
+3. **核对方案**：Agent 使用服务端目录给出完整中文摘要，调用 `arena_prepare` 仅保存方案，不排队开局。要修改配置就重新给出摘要，旧确认 ID 失效。
+4. **真人确认**：在摘要后的下一条消息回复“确认”“就这样”或“可以开始”。只有这条真正的人类确认与有效 `confirmation_id` 对应时，`arena_confirm` 才启动自动备赛、排队、入场和同会话持续游玩。模型自己确认、同一条旧消息、否定或取消均无效。方案五分钟未确认需重新核对。
 
-若提示配对码无效，直接告诉 Agent“配对码无效”或“重新配对”，它会使用 `arena_repair_pairing` 原子换码，不删除身份文件。换码后旧码无法再批准。修复不会自动重开已停止的游戏；完成后明确说“继续 Model行动”再入场。
+确认后由同一 DSH Agent 自主操作，直到服务器确认终局。下一局仍须重新核对配置并得到人类确认；保存资格不代表自动同意开局。停止后不会被后台续行复活，等待邀请码、配置或确认时也不会阻塞对话，用户可以正常回复。
 
-原生工具：arena_start、arena_connect、arena_status、arena_repair_pairing、arena_stop。游戏工具命名空间为 mcp__model_action__*。默认服务器 https://xingying.dev，可通过 MODEL_ACTION_SERVER_URL 或 model-action-native 的 profile 配置修改。
+原生工具：`arena_start`、`arena_connect`、`arena_submit_invite`、`arena_prepare`、`arena_confirm`、`arena_status`、`arena_stop`。`arena_repair_pairing` 仅用于显式兼容旧网页配对，新版对话流程不需要它。游戏工具命名空间为 `mcp__model_action__*`。
 
-插件只管理生命周期和预算，不提供战斗脚本或全知观赛信息；用户停止不会被后台续行复活。每个 DSH 会话单独保存连接，保留文件权限与原子回执确认机制。
+默认服务器 https://xingying.dev，可通过 `MODEL_ACTION_SERVER_URL` 或 `model-action-native` 的 profile 配置修改。`arena_status` 提供当前对话阶段、安全选项、方案与权威游戏结果；已有进行中的服务器对局会明确显示，不擅自重排或默认接管。
 
-官方工具管线在模型执行通用工具前阻止私有身份路径访问，并在工具输出进入会话前拦截已知凭证字段及游戏凭证格式。此措施防止误读、误删和明文回显，不替代操作系统沙箱；不要让 Agent 用 Bash 排查私有身份文件。
+插件只管理生命周期和预算，不提供战斗脚本或全知观赛信息。每个 DSH 会话单独保存连接，控制租约、档案恢复和游戏凭证保留在客户端私有存储，不进入工具输出。官方工具管线会阻止通用工具直接访问私有身份路径，并在输出进入会话前拦截已知凭证字段与格式。此措施不替代操作系统沙箱；不要让 Agent 用 Bash 排查或删除身份文件。
 
 ## 构建 npm 安装包
 
@@ -55,8 +58,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.1.3.tgz
-- model-action-mcp-0.1.3.tgz
+- dsh-model-action-0.2.0.tgz
+- model-action-mcp-0.2.0.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -68,7 +71,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.1.3.tgz
+npm install -g ./dist/model-action-mcp-0.2.0.tgz
 ```
 
 然后配置 MCP：

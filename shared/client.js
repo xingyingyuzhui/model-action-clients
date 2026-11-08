@@ -27,8 +27,8 @@ function pairingRecord(reply) {
 const publicPairing = pairing => ({ state: 'pending', user_code: pairing.user_code, expires_at_ms: pairing.expires_at_ms, poll_interval_ms: pairing.poll_interval_ms });
 
 
-// The client never approves a browser pairing, manipulates a browser session or
-// exposes game credentials as a tool result. All grants are durable before ACK.
+// Native invitation exchange and browser pairing are separate admission paths.
+// Both retain private credentials in the store and expose only safe DTOs.
 export class ArenaClient {
   constructor({ serverUrl, store, fetcher = globalThis.fetch, clock = Date.now, timeoutMs = 15000, signal } = {}) {
     this.serverUrl = origin(serverUrl); this.store = store; this.fetcher = fetcher; this.clock = clock;
@@ -88,6 +88,77 @@ export class ArenaClient {
     if (!loop || !['idle','running','waiting','stopped','error'].includes(loop.state) || (loop.reason !== undefined && !['user_stop','time_limit','budget_limit','client_error',null].includes(loop.reason))) throw error('invalid_client_input');
     const value = await this.load();
     return this.request('/client/v2/heartbeat', { bearer: this.control(value), body: { loop: { state: loop.state, ...(loop.reason !== undefined ? { reason: loop.reason } : {}) } } });
+  }
+
+  async catalog(){
+    const data=await this.request('/lobby/v2/catalog',{method:'GET'});
+    if(!Array.isArray(data.appearance?.character)||!Array.isArray(data.loadouts)||!Array.isArray(data.mode_ids))throw error('invalid_response');
+    return {schema_version:2,catalog_revision:data.catalog_revision,appearance:{character:data.appearance.character.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,cosmetic_only:true}))},
+      loadouts:data.loadouts.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,weapon:p.weapon,equipment:p.equipment,weight_kg:p.weight_kg,total_value:p.total_value})),mode_ids:data.mode_ids};
+  }
+  async connectNative({ticket,label='Model行动 client',version='0.2.0'}={}){
+    requireText(label,60);requireText(version,40);
+    if(ticket!==undefined){
+      if(typeof ticket!=='string')throw error('invalid_invite_input');
+      ticket=ticket.trim();
+      if(ticket.startsWith('https://')||ticket.startsWith('http://')){
+        let url;try{url=new URL(ticket);}catch{throw error('invalid_invite_input');}
+        const params=new URLSearchParams(url.hash.slice(1));
+        if(url.origin!==this.serverUrl||url.pathname!=='/agent-arena/lobby/'||url.search||url.username||url.password||params.getAll('invite').length!==1||[...params.keys()].some(k=>k!=='invite'))throw error('invalid_invite_input');
+        ticket=params.get('invite');
+      }
+      requireText(ticket,200);
+    }
+    return this.exclusive(async()=>{
+      const value=await this.load();
+      if(typeof this.store.readNativeMigration==='function'){
+        const ids=Object.values(value.profiles).filter(p=>p.acked).map(p=>p.public_agent_id);
+        const migration=await this.store.readNativeMigration(this.serverUrl,ids);
+        if(migration&&!value.native_access){value.native_access=migration;await this.store.write(value);}
+        if(migration&&value.native_access?.token===migration.token)await this.store.consumeNativeMigration?.();
+      }
+      if(value.control?.acked){
+        try{
+          const session=await this.request('/client/v2/session',{method:'GET',bearer:this.control(value)});
+          if(!states.has(session.state))throw error('invalid_response');
+          return {state:'connected',grant:value.native_access?.grant??null,session:await this.restoreNativeProfile(value,session)};
+        }catch(cause){if(cause.status!==401)throw cause;this.clearConnection(value);await this.store.write(value);}
+      }
+      let pending=value.pending_native_connect;
+      if(pending&&ticket!==undefined&&pending.body.ticket!==ticket)throw error('pending_native_connection_conflict');
+      if(!pending){
+        const proof=ticket??value.native_access?.token??value.native_legacy_ticket;
+        if(!proof)throw error('invite_required');
+        const body={...(ticket!==undefined||!value.native_access?.token?{ticket:proof}:{access_token:proof}),label,version,protocol_version:1};
+        pending={key:randomUUID(),body};value.pending_native_connect=pending;await this.store.write(value);
+      }
+      let reply;
+      try{reply=await this.request('/client/v2/access/connect',{body:pending.body,key:pending.key});}
+      catch(cause){
+        if([400,401,403,404,409,410,422].includes(cause.status)){value.pending_native_connect=null;await this.store.write(value);}
+        throw cause;
+      }
+      if(!token(reply.control_token)||!(reply.access_token===null||token(reply.access_token))||!states.has(reply.session?.state))throw error('invalid_response');
+      if(reply.access_token!==null&&(!identifier(reply.grant?.id)||!Number.isSafeInteger(reply.grant?.expires_at_ms)||reply.grant.state!=='active'))throw error('invalid_response');
+      value.control={token:reply.control_token,acked:true};value.pairing=null;
+      value.native_access=reply.access_token===null?null:{token:reply.access_token,grant:{id:reply.grant.id,expires_at_ms:reply.grant.expires_at_ms,state:reply.grant.state,max_concurrent_agents:reply.grant.max_concurrent_agents??1}};
+      if(reply.access_token===null)value.native_legacy_ticket=pending.body.ticket??value.native_legacy_ticket;
+      else delete value.native_legacy_ticket;
+      value.pending_native_connect=null;await this.store.write(value);
+      return {state:'connected',grant:value.native_access?.grant??null,session:await this.restoreNativeProfile(value,reply.session)};
+    });
+  }
+  async restoreNativeProfile(value,session){
+    const preferred=value.profiles[value.last_profile_id];
+    const recent=preferred?.acked&&!preferred.unavailable?preferred:Object.values(value.profiles).filter(p=>p.acked&&!p.unavailable).at(-1);
+    if(session.state==='preparing'&&!session.public_agent_id&&recent?.acked&&token(recent.recovery_secret)){
+      try{return await this.request('/client/v2/profile/recover',{bearer:this.control(value),body:{public_agent_id:recent.public_agent_id,recovery_secret:recent.recovery_secret}});}
+      catch(cause){
+        if(!['agent_deleted','invalid_profile_proof','profile_not_found'].includes(cause.code))throw cause;
+        recent.unavailable=true;await this.store.write(value);
+      }
+    }
+    return session;
   }
 
   async pairInit({ label, version }) {
@@ -214,7 +285,9 @@ export class ArenaClient {
       }
       const reply = await this.request('/client/v2/profile/claim', { body: { receipt: profile.receipt }, bearer });
       if (reply.state !== 'acknowledged' || reply.public_agent_id !== id) throw error('invalid_response');
-      profile.acked = true; delete profile.receipt; await this.store.write(value);
+      profile.acked = true; delete profile.receipt;value.last_profile_id=id;
+      if(value.entry_preferences){profile.name=value.entry_preferences.name;profile.appearance={character:value.entry_preferences.character_id??'default'};}
+      await this.store.write(value);
       return { state: 'saved', public_agent_id: id };
     });
   }
@@ -258,7 +331,9 @@ export class ArenaClient {
   }
   async result() { const value = await this.load(); return this.request('/client/v2/result', { method: 'GET', bearer: this.control(value) }); }
   async entryMutation(name, route, body, allowedStates) {
-    return this.exclusive(async () => {
+    return this.exclusive(()=>this.performEntryMutation(name,route,body,allowedStates));
+  }
+  async performEntryMutation(name,route,body,allowedStates){
       const value = await this.load(), bearer = this.control(value);
       let intent = value.pending_operations[name];
       if (intent && JSON.stringify(intent.body) !== JSON.stringify(body)) throw error('pending_operation_conflict');
@@ -274,13 +349,24 @@ export class ArenaClient {
       else delete value.pending_operations[name];
       await this.store.write(value);
       return reply;
-    });
   }
-  async prepareEntry({ mode_id, room_id, name, loadout_id }) {
+  async prepareEntry({ mode_id, room_id, name, loadout_id, character_id }) {
     if (!['extraction','battle_royale'].includes(mode_id) || (room_id !== null && !['public-1','br-1','br-2','br-3'].includes(room_id)) || (mode_id === 'extraction' && room_id !== null && room_id !== 'public-1') || (mode_id === 'battle_royale' && room_id === 'public-1')) throw error('invalid_client_input');
     if (name !== undefined) requireText(name, 24);
     if (loadout_id !== undefined && !['rifle','smg','shotgun','armored'].includes(loadout_id)) throw error('invalid_client_input');
-    return this.entryMutation('prepare','/client/v2/prepare',{mode_id,room_id,...(name !== undefined ? {name}:{}),...(loadout_id !== undefined ? {loadout_id}:{})},['preparing','ended']);
+    if(character_id!==undefined&&!['default','mimo','deepseek','qwen','kimi','glm'].includes(character_id))throw error('invalid_client_input');
+    const body={mode_id,room_id,...(name!==undefined?{name}:{}),...(loadout_id!==undefined?{loadout_id}:{}),...(character_id!==undefined?{character_id}:{})};
+    return this.exclusive(async()=>{
+      let value=await this.load();
+      if(value.pending_operations.withdraw){await this.performEntryMutation('withdraw','/client/v2/withdraw',{},['preparing','ready','ended']);value=await this.load();}
+      if(!value.pending_operations.prepare){
+        const session=await this.request('/client/v2/session',{method:'GET',bearer:this.control(value)});
+        if(session.state==='ready')await this.performEntryMutation('withdraw','/client/v2/withdraw',{},['ready']);
+      }
+      const result=await this.performEntryMutation('prepare','/client/v2/prepare',body,['preparing','ended']);
+      if(result.state==='ready'){value=await this.load();value.entry_preferences=body;const profile=value.profiles[result.public_agent_id];if(profile){if(body.name!==undefined)profile.name=body.name;if(body.character_id!==undefined)profile.appearance={character:body.character_id};}await this.store.write(value);}
+      return result;
+    });
   }
   async queueEntry() { return this.entryMutation('queue','/client/v2/queue',{},['ready']); }
   async acceptOffer(offerId) {
@@ -303,9 +389,12 @@ export class ArenaClient {
   }
   async publicState() {
     const value = await this.load();
+    const migration=!value.native_access&&typeof this.store.readNativeMigration==='function'?await this.store.readNativeMigration(this.serverUrl,Object.values(value.profiles).filter(p=>p.acked).map(p=>p.public_agent_id)):null;
     return { server_url: this.serverUrl, connected: !!value.control?.acked,
       pairing: value.pairing ? { user_code: value.pairing.user_code, expires_at_ms: value.pairing.expires_at_ms, poll_interval_ms: value.pairing.poll_interval_ms } : null,
-      profiles: Object.values(value.profiles).map(p => ({ public_agent_id: p.public_agent_id, saved: !!p.acked })),
+      profiles: Object.values(value.profiles).map(p => ({ public_agent_id: p.public_agent_id, saved: !!p.acked&&!p.unavailable,...(p.name?{name:p.name}:{}),...(p.appearance?{appearance:clone(p.appearance)}:{}) })),
+      access_credential_saved:!!value.native_access?.token||!!value.native_legacy_ticket||!!migration,native_connect_pending:!!value.pending_native_connect,
+      entry_preferences:value.entry_preferences?clone(value.entry_preferences):null,
       attempt: value.attempt ? { attempt_id: value.attempt.attempt_id, acknowledged: !!value.attempt.acked } : null };
   }
 }

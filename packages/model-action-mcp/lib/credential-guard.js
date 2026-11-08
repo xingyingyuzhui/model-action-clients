@@ -19,8 +19,9 @@ export function containsPrivateCredentials(result){
   const text=encoded(result);
   // Inspect the visible result, including JSON serialized inside text blocks.
   const decoded=text.replace(/\\"/g,'"');
+  if(/\bmodel_beta_(?:invite_)?[A-Za-z0-9_-]{43}\b/.test(decoded))return true;
   if(/\baea_profile_[A-Za-z0-9_-]{32,}\b/.test(decoded)||/\baea_[a-f0-9]{48}\b/.test(decoded))return true;
-  return /["'](?:device_secret|recovery_secret|control_token|game_token)["']\s*:\s*["'][A-Za-z0-9_-]{16,}["']/.test(decoded)||
+  return /["'](?:device_secret|recovery_secret|control_token|game_token|access_token)["']\s*:\s*["'][A-Za-z0-9_-]{16,}["']/.test(decoded)||
     /["']token["']\s*:\s*["'][A-Za-z0-9_-]{16,}["']/.test(decoded);
 }
 export function installCredentialGuard(ctx,{home}={}){

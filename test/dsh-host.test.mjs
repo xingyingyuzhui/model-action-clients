@@ -5,8 +5,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function fixture(config = {}) {
-  const globals = new Map(), listeners = new Map(), roots = [], agents = new Map(), stores = [], runtimes = [], globalGuards = [];
+function fixture(config = {}, { qualified = true, clock = Date.now, pending = false } = {}) {
+  const globals = new Map(), listeners = new Map(), roots = [], agents = new Map(), stores = [], runtimes = [], clients = [], globalGuards = [];
   let nextMessage = 0;
   const register = map => definition => {
     assert.equal(map.has(definition.name), false, definition.name);
@@ -21,17 +21,23 @@ function fixture(config = {}) {
   async function emit(name, ...args) { for (const fn of [...listeners.get(name) ?? []]) await fn(...args); }
   class Store { constructor(file) { this.file = file; this.closed = false; stores.push(this); } async close() { this.closed = true; } }
   class Client {
-    constructor(options) { this.options = options; this.connected = false; this.resets = 0; }
-    async publicState() { return { connected: this.connected }; }
-    async session() { if (this.sessionError) throw this.sessionError; return { state: 'preparing' }; }
+    constructor(options) { this.options = options; this.connected = qualified; this.saved = qualified; this.pending = pending; this.resets = 0; this.nativeCalls = []; this.catalogValue = {catalog_revision:'native-test-1',appearance:{character:[{id:'default',name:'默认形象',enabled:true},{id:'qwen',name:'Qwen 娘',enabled:true}]},loadouts:[{id:'rifle',name:'步枪配置',enabled:true},{id:'smg',name:'冲锋枪配置',enabled:true}],mode_ids:['extraction','battle_royale']}; clients.push(this); }
+    async publicState() { return { connected: this.connected, access_credential_saved:this.saved, native_connect_pending:this.pending, profiles:[] }; }
+    async connectNative(args={}) { this.nativeCalls.push(args); if(this.nativeError)throw this.nativeError; if(this.sessionError){if(this.sessionError.status!==401)throw this.sessionError;await this.resetConnection();this.sessionError=null;} if(args.ticket||this.pending){this.saved=true;this.pending=false;} if(!this.saved)throw Object.assign(new Error('access required'),{code:'native_access_required'});this.connected=true;return {state:'connected',session:{state:this.serverState??'preparing'}}; }
+    async catalog() { return structuredClone(this.catalogValue); }
+    async session() { if (this.sessionError) throw this.sessionError; return { state: this.serverState ?? 'preparing', ...(this.serverAttempt ? {attempt:this.serverAttempt} : {}), ...(this.serverResult ? {result:this.serverResult} : {}) }; }
+    async withdrawEntry() { this.withdrawals = (this.withdrawals ?? 0) + 1; if (this.withdrawError) throw this.withdrawError; this.serverState = 'preparing'; return this.session(); }
+    async clearAttempt(id) { (this.cleared ??= []).push(id); }
+    async result() { return {result:this.serverResult}; }
     async resetConnection() { this.resets++; this.connected = false; }
   }
   class Runtime {
     constructor(options) { this.options = options; this.calls = []; this.stops = []; this.view = { phase: 'idle', entry_state: null, active: false, current_attempt: null }; runtimes.push(this); }
     state() { return structuredClone(this.view); }
     async start(options) {
-      this.entry = options.entry;
-      this.view = { ...this.view, phase: 'pairing', active: true, pairing: { user_code: 'SAFE-PAIR', expires_at_ms: Date.now() + 300000 }, game_token: 'private-never-output' };
+      this.entry = options.entry; this.startOptions = options;
+      if (options.autoEnter === false) { this.view = { ...this.view, active:true, entry_state:this.options.client.serverState }; return this.state(); }
+      this.view = { ...this.view, phase: 'waiting', active: true, entry_state:'waiting', game_token: 'private-never-output' };
       this.options.onState(this.state()); return this.state();
     }
     enter() {
@@ -42,6 +48,12 @@ function fixture(config = {}) {
     async listGameTools() { return [{ name: 'observe', description: 'Authoritative game view', inputSchema: { type: 'object', properties: {} } }]; }
     async callGame(name, args, signal) { this.calls.push({ name, args, signal }); return { content: [{ type: 'text', text: '{"ok":true}' }] }; }
     async stop(reason, options) {
+      if (this.startOptions?.autoEnter === false) {
+        this.stops.push({reason,options}); this.view.active=false;
+        const confirmed = !this.options.client.exitUnconfirmed;
+        if (confirmed) this.options.client.serverState='ended';
+        return {stopped:true,character_state:confirmed?'ended':'still_in_world',terminal_confirmed:confirmed,...(confirmed?{result:{outcome:'abandoned'}}:{})};
+      }
       this.stops.push({ reason, options }); this.view.active = false; this.view.phase = 'stopped';
       return { stopped: true, character_state: this.view.entry_state === 'ended' || options.abandon ? 'ended' : this.view.entry_state === 'in_world' ? 'still_in_world' : 'not_in_world' };
     }
@@ -56,7 +68,7 @@ function fixture(config = {}) {
     }
   }
   const dependencies = {
-    ArenaRuntime: Runtime, ArenaClient: Client, AtomicStore: Store, defineTool: x => x,
+    ArenaRuntime: Runtime, ArenaClient: Client, AtomicStore: Store, defineTool: x => x, clock,
     createUserMessage: value => ({ ...value, role: 'user', id: `message_${++nextMessage}` }),
     createMcpToolDefinition: (_ctx, options) => ({ name: options.name, parameters: options.inputSchema,
       output: { schema: { type: 'object' }, render: (_a, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute: options.call }),
@@ -84,7 +96,7 @@ function fixture(config = {}) {
     agents.set(id, agent); if (root) roots.push(agent); return agent;
   }
   const run = (name, args, agent, signal = agent.controller.signal) => globals.get(name).execute(args, { agent, signal, callId: 'native_call', rootCallId: 'native_call' });
-  return { ctx, host, globals, stores, runtimes, agent, run, emit, globalGuards };
+  return { ctx, host, globals, stores, runtimes, clients, agent, run, emit, globalGuards };
 }
 
 test('native start rejects child agents, non-human/tool messages, unrelated human turns and secret arguments', async t => {
@@ -102,8 +114,8 @@ test('native start rejects child agents, non-human/tool messages, unrelated huma
 test('session-scoped native tools isolate two agents and never expose private credentials', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
   const a = f.agent('a/../../unsafe'), b = f.agent('b');
-  const paired = await f.run('arena_start', {}, a); await f.run('arena_start', { mode_id: 'battle_royale', room_id: 'br-1' }, b);
-  assert.equal(paired.pairing.user_code, 'SAFE-PAIR');
+  const paired = await beginGame(f, a); await beginGame(f, b, { mode_id:'battle_royale',room_id:'br-1' });
+  assert.equal(paired.phase, 'waiting');
   assert.ok(!JSON.stringify(paired).includes('private-never-output'));
   assert.notEqual(f.stores[0].file, f.stores[1].file);
   assert.ok(!f.stores[0].file.includes('unsafe'));
@@ -122,7 +134,7 @@ test('session-scoped native tools isolate two agents and never expose private cr
 
 test('preparing native turn waits without model polling, then injects same-turn continuation once', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('headless'); await f.run('arena_start', {}, a);
+  const a = f.agent('headless'); await beginGame(f, a);
   let completed = false;
   const pending = f.emit('agent/turn-stopping', { agent: a, signal: a.controller.signal }).then(() => { completed = true; });
   await flush(); assert.equal(completed, false); assert.equal(a.injections.length, 0);
@@ -136,7 +148,7 @@ test('preparing native turn waits without model polling, then injects same-turn 
 
 test('idle entered agent uses native followup rather than another process or Agent instance', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('desktop-idle', { status: 'idle' }); await f.run('arena_start', {}, a);
+  const a = f.agent('desktop-idle', { status: 'idle' }); await beginGame(f, a);
   f.runtimes[0].enter(); await flush();
   assert.equal(a.followups.length, 1); assert.equal(a.injections.length, 0);
   assert.equal(f.ctx.agents.roots().length, 1);
@@ -144,7 +156,7 @@ test('idle entered agent uses native followup rather than another process or Age
 
 test('abort while pairing stops pending native continuation and late entry cannot revive it', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('cancelled'); await f.run('arena_start', {}, a);
+  const a = f.agent('cancelled'); await beginGame(f, a);
   const pending = f.emit('agent/turn-stopping', { agent: a, signal: a.controller.signal });
   await flush(); a.controller.abort({ kind: 'user' }); await pending;
   assert.equal(f.runtimes[0].stops[0].reason, 'user_stop');
@@ -156,7 +168,7 @@ test('abort while pairing stops pending native continuation and late entry canno
 
 test('terminal gracefully reports authoritative result and restores tools only after native turn ends', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('terminal'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const a = f.agent('terminal'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   await f.runtimes[0].terminal({ outcome: 'won', placement: 1 });
   assert.equal(a.cancels.length, 0); assert.equal(a.scopeState.restricted, true);
   assert.equal(a.controller.signal.aborted, false);
@@ -168,7 +180,7 @@ test('terminal gracefully reports authoritative result and restores tools only a
   const status = await f.run('arena_status', {}, a, new AbortController().signal);
   assert.deepEqual(status.result, { outcome: 'won', placement: 1 });
   assert.equal(status.native_loop.armed, false); assert.equal(status.native_loop.stop_reason, 'server_terminal');
-  await assert.rejects(f.run('arena_start', {}, a, new AbortController().signal), { code: 'arena_new_human_start_required' });
+  await assert.rejects(f.run('arena_start', {}, a, new AbortController().signal), { code: 'arena_human_authorization_required' });
   const before = a.injections.length; f.runtimes[0].enter(); await flush(); assert.equal(a.injections.length, before);
   await f.emit('agent/turn-stopping', { agent: a, signal: a.controller.signal });
   assert.equal(a.injections.length, before, 'terminal closing does not arm another gameplay step');
@@ -178,7 +190,7 @@ test('terminal gracefully reports authoritative result and restores tools only a
 
 test('game-tool and native continuation budgets are enforced outside model instructions', async t => {
   const f = fixture({ maxToolCalls: 1, maxContinuations: 2 }); t.after(() => f.host.dispose());
-  const a = f.agent('budget'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const a = f.agent('budget'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   const definition = a.scoped.get('mcp__model_action__observe');
   await definition.execute({}, { agent: a, signal: a.controller.signal });
   await assert.rejects(definition.execute({}, { agent: a, signal: a.controller.signal }), { code: 'arena_budget_exhausted' });
@@ -186,7 +198,7 @@ test('game-tool and native continuation budgets are enforced outside model instr
   assert.equal(f.runtimes[0].stops[0].options.abandon, true);
   assert.equal(a.scopeState.restricted, false);
   const g = fixture({ maxContinuations: 1 }); t.after(() => g.host.dispose());
-  const b = g.agent('continuation-budget'); await g.run('arena_start', {}, b); g.runtimes[0].enter(); await flush();
+  const b = g.agent('continuation-budget'); await beginGame(g, b); g.runtimes[0].enter(); await flush();
   b.inbox.nextStep.length = 0;
   await g.emit('agent/turn-stopping', { agent: b, signal: b.controller.signal }); await flush();
   assert.equal(b.injections.length, 1); assert.equal(g.runtimes[0].stops[0].reason, 'budget_limit');
@@ -194,7 +206,7 @@ test('game-tool and native continuation budgets are enforced outside model instr
 });
 
 test('explicit stop distinguishes remaining character and disposal closes each store without revival', async () => {
-  const f = fixture(), a = f.agent('stopped'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const f = fixture(), a = f.agent('stopped'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   const result = await f.run('arena_stop', { abandon: false }, a);
   assert.equal(result.character_state, 'still_in_world');
   const before = a.injections.length; f.runtimes[0].enter(); await flush(); assert.equal(a.injections.length, before);
@@ -205,31 +217,29 @@ test('explicit stop distinguishes remaining character and disposal closes each s
 
 test('explicit new human start recovers a saved control lease only after confirmed control 401', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('restart'); await f.run('arena_start', {}, a);
+  const a = f.agent('restart'); await beginGame(f, a);
   await f.run('arena_stop', {}, a);
   const client = f.runtimes[0].options.client;
   client.connected = true; client.sessionError = Object.assign(new Error('expired'), { code: 'client_unauthorized', status: 401 });
-  a.session.log.push({ type: 'turn/start', seq: 10, data: { turn: 2 } },
-    { type: 'user/message', seq: 11, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '请恢复连接并加入游戏' }] } });
+  nextHumanTurn(a, '请恢复连接并加入游戏');
   await f.run('arena_connect', {}, a);
-  assert.equal(client.resets, 1); assert.equal(f.runtimes.length, 2);
-  assert.equal((await f.run('arena_status', {}, a)).phase, 'pairing');
+  assert.equal(client.resets, 1); assert.equal(f.runtimes.length, 1);
+  assert.equal((await f.run('arena_status', {}, a)).phase, 'configuring');
 });
 
 test('network failure on saved control verification never clears the stored identity', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('network'); await f.run('arena_start', {}, a); await f.run('arena_stop', {}, a);
+  const a = f.agent('network'); await beginGame(f, a); await f.run('arena_stop', {}, a);
   const client = f.runtimes[0].options.client;
   client.connected = true; client.sessionError = Object.assign(new Error('offline'), { code: 'network_error', retryable: true });
-  a.session.log.push({ type: 'turn/start', seq: 10, data: { turn: 2 } },
-    { type: 'user/message', seq: 11, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '请恢复连接游戏' }] } });
+  nextHumanTurn(a, '请恢复连接游戏');
   await assert.rejects(f.run('arena_connect', {}, a), { code: 'network_error' });
   assert.equal(client.resets, 0);
 });
 
 test('fatal runtime failure cannot continue merely because its last entry state was in-world', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('fatal'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const a = f.agent('fatal'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   const count = a.injections.length;
   f.runtimes[0].view = { ...f.runtimes[0].view, phase: 'error', active: false };
   f.runtimes[0].options.onState(f.runtimes[0].state()); await flush();
@@ -258,7 +268,7 @@ test('official native apply resolves undefined and loads/unloads through real Co
       assert.equal(result, undefined);
     } });
   await fiber;
-  assert.deepEqual([...definitions], ['arena_start', 'arena_connect', 'arena_status', 'arena_repair_pairing', 'arena_stop']);
+  assert.deepEqual([...definitions], ['arena_start','arena_connect','arena_submit_invite','arena_prepare','arena_confirm','arena_status','arena_repair_pairing','arena_stop']);
   await fiber.dispose();
   assert.equal(definitions.size, 0);
   assert.equal(globalGuards.size, 0);
@@ -267,7 +277,7 @@ test('official native apply resolves undefined and loads/unloads through real Co
 
 test('entered callback and turn-stopping share one in-flight MCP bridge installation', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('bridge-race'); await f.run('arena_start', {}, a);
+  const a = f.agent('bridge-race'); await beginGame(f, a);
   const runtime = f.runtimes[0]; let release, lists = 0;
   const gate = new Promise(resolve => { release = resolve; });
   runtime.listGameTools = async () => {
@@ -290,15 +300,14 @@ test('entered callback and turn-stopping share one in-flight MCP bridge installa
 
 test('late old-generation tools/list cannot register into or wake the next human-started game', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('stale-bridge'); await f.run('arena_start', {}, a);
+  const a = f.agent('stale-bridge'); await beginGame(f, a);
   const old = f.runtimes[0]; let release;
   old.listGameTools = () => new Promise(resolve => { release = () => resolve([{ name: 'old_tool', inputSchema: { type: 'object', properties: {} } }]); });
   old.enter(); await flush();
   assert.equal(a.scoped.has('mcp__model_action__old_tool'), false);
   await f.run('arena_stop', {}, a);
-  a.session.log.push({ type: 'turn/start', seq: 10, data: { turn: 2 } },
-    { type: 'user/message', seq: 11, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '再次开始游戏' }] } });
-  await f.run('arena_start', {}, a); const current = f.runtimes[1];
+  nextHumanTurn(a, '再次开始游戏');
+  await beginGame(f, a); const current = f.runtimes[1];
   current.enter(); await flush();
   assert.equal(a.scoped.has('mcp__model_action__observe'), true);
   const injections = a.injections.length;
@@ -313,7 +322,7 @@ test('late old-generation tools/list cannot register into or wake the next human
 
 test('terminal queues its result before a slow runtime stop can race native turn-stopping', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('slow-terminal-stop'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const a = f.agent('slow-terminal-stop'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   a.inbox.nextStep.length = 0;
   const runtime = f.runtimes[0], originalStop = runtime.stop.bind(runtime);
   let release; const gate = new Promise(resolve => { release = resolve; });
@@ -338,7 +347,7 @@ test('terminal queues its result before a slow runtime stop can race native turn
 
 test('arena_stop during terminal closing cannot restore external tools before turn/end', async t => {
   const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('terminal-then-stop'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
+  const a = f.agent('terminal-then-stop'); await beginGame(f, a); f.runtimes[0].enter(); await flush();
   await f.runtimes[0].terminal({ outcome: 'killed' });
   assert.equal(a.scopeState.restricted, true);
   const stopped = await f.run('arena_stop', {}, a);
@@ -351,95 +360,153 @@ test('arena_stop during terminal closing cannot restore external tools before tu
 });
 
 function nextHumanTurn(agent, text, source = 'user') {
-  const seq = agent.session.log.length + 20;
+  const seq = Math.max(0,...agent.session.log.map(event=>event.seq??0)) + 10;
   agent.session.log.push({ type: 'turn/start', seq, data: { turn: seq } },
     { type: 'user/message', seq: seq + 1, data: { source: { kind: source }, content: [{ type: 'text', text }] } });
 }
+const entry = {name:'测试玩家',character_id:'qwen',loadout_id:'rifle',mode_id:'extraction',room_id:'public-1'};
+async function beginGame(f,a,overrides={}) {
+  await f.run('arena_start',{},a);
+  const prepared=await f.run('arena_prepare',{...entry,...overrides},a);
+  nextHumanTurn(a,'确认');
+  return f.run('arena_confirm',{confirmation_id:prepared.dialogue.confirmation_id},a);
+}
 
-test('natural enable requests are accepted and negative enable/open requests are never authorization', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  for (const text of ['开启model行动插件', '打开 Model行动', 'enable Model Action plugin']) {
-    const a = f.agent('accepted-' + text, { text });
-    assert.equal((await f.run('arena_start', {}, a)).native_loop.armed, true);
+test('native start opens conversation only, naturally accepts enable/open and rejects unrelated or negative intents',async t=>{
+  const f=fixture({}, {qualified:false});t.after(()=>f.host.dispose());
+  for(const text of ['开启model行动插件','打开 Model行动','enable Model Action plugin']){
+    const a=f.agent('dialogue-'+text,{text});const status=await f.run('arena_start',{},a);
+    assert.equal(status.phase,'awaiting_ticket');assert.equal(status.native_loop.armed,false);assert.equal(status.pairing,null);
+    await f.emit('agent/turn-stopping',{agent:a,signal:a.controller.signal});
   }
-  for (const text of ['不要开启model行动插件', '别打开 Model行动', 'do not enable Model Action plugin', '停止启动 Model行动']) {
-    await assert.rejects(f.run('arena_start', {}, f.agent('refused-' + text, { text })), { code: 'arena_human_authorization_required' });
+  assert.equal(f.runtimes.length,0);assert.ok(f.clients.every(c=>c.nativeCalls.length===0));
+  for(const text of ['不要开启model行动插件','别打开Model行动','do not enable Model Action plugin','打开天气插件','开启corn-cad插件'])await assert.rejects(f.run('arena_start',{},f.agent('negative-'+text,{text})),{code:'arena_human_authorization_required'});
+});
+
+test('a current human invite or full same-origin link grants access without exposing it in tool arguments or output',async t=>{
+  const f=fixture({}, {qualified:false});t.after(()=>f.host.dispose());const a=f.agent('ticket');await f.run('arena_start',{},a);
+  const ticket='model_beta_invite_'+'A'.repeat(43);nextHumanTurn(a,'这是我的邀请链接：https://xingying.dev/agent-arena/lobby/#invite='+ticket);
+  const status=await f.run('arena_submit_invite',{},a);
+  assert.equal(f.clients[0].nativeCalls[0].ticket,ticket);assert.equal(status.phase,'configuring');assert.equal(status.browser_required,false);
+  assert.ok(!JSON.stringify(status).includes(ticket));assert.equal(f.runtimes.length,0);
+  await assert.rejects(f.run('arena_submit_invite',{ticket},a),{code:'arena_invalid_entry'});
+});
+
+test('invite submission refuses old/plugin-provided, ambiguous, cancelled and off-origin tickets',async t=>{
+  const f=fixture({}, {qualified:false});t.after(()=>f.host.dispose());const a=f.agent('ticket-invalid');const ticket='model_beta_invite_'+'B'.repeat(43);await f.run('arena_start',{},a);
+  for(const [text,source,code]of [[ticket,'plugin','arena_human_authorization_required'],['不要使用这个邀请码 '+ticket,'user','arena_human_authorization_required'],[ticket+' model_beta_invite_'+'C'.repeat(43),'user','arena_invite_ambiguous'],['https://other.invalid/#invite='+ticket,'user','arena_invite_origin_mismatch']]){
+    nextHumanTurn(a,text,source);await assert.rejects(f.run('arena_submit_invite',{},a),{code});
+  }
+  assert.equal(f.clients[0].nativeCalls.length,0);
+});
+
+test('saved eligibility is reused but no room preparation runs before a complete summary and later human confirmation',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('confirm');const opened=await f.run('arena_start',{},a);
+  assert.equal(opened.phase,'configuring');assert.equal(f.clients[0].nativeCalls.length,1);assert.equal(f.runtimes.length,0);
+  await assert.rejects(f.run('arena_prepare',{name:'Only name'},a),{code:'arena_configuration_incomplete'});
+  const prepared=await f.run('arena_prepare',entry,a);assert.equal(prepared.phase,'awaiting_confirmation');
+  for(const value of ['测试玩家','Qwen 娘','步枪配置','持久搜打撤','公开持久房'])assert.ok(prepared.dialogue.summary.includes(value));
+  const id=prepared.dialogue.confirmation_id;assert.ok(id);assert.equal(f.runtimes.length,0);assert.equal(prepared.native_loop.armed,false);
+  await assert.rejects(f.run('arena_confirm',{confirmation_id:id},a),{code:'arena_human_confirmation_required'});
+  nextHumanTurn(a,'可以开始');const started=await f.run('arena_confirm',{confirmation_id:id},a);assert.equal(started.native_loop.armed,true);assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].entry,entry);
+  await f.run('arena_confirm',{confirmation_id:id},a);assert.equal(f.runtimes.length,1);
+});
+
+test('a configuration change, intervening human message, negative confirmation or cancelled proposal cannot reuse approval',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());
+  for(const text of ['不要开始','取消','确认但把名字改成别的','他说确认']){
+    const a=f.agent('reject-confirm-'+text);await f.run('arena_start',{},a);const prepared=await f.run('arena_prepare',entry,a);nextHumanTurn(a,text);
+    await assert.rejects(f.run('arena_confirm',{confirmation_id:prepared.dialogue.confirmation_id},a),{code:'arena_human_confirmation_required'});
+  }
+  const a=f.agent('changed');await f.run('arena_start',{},a);const old=await f.run('arena_prepare',entry,a);nextHumanTurn(a,'改成自动匹配大逃杀');const changed=await f.run('arena_prepare',{...entry,mode_id:'battle_royale',room_id:null},a);assert.ok(changed.dialogue.summary.includes('自动匹配大逃杀房间'));nextHumanTurn(a,'确认');
+  await assert.rejects(f.run('arena_confirm',{confirmation_id:old.dialogue.confirmation_id},a),{code:'arena_confirmation_stale'});
+  await f.run('arena_confirm',{confirmation_id:changed.dialogue.confirmation_id},a);assert.equal(f.runtimes.at(-1).entry.room_id,null);
+  const b=f.agent('intervening');await f.run('arena_start',{},b);const pending=await f.run('arena_prepare',entry,b);nextHumanTurn(b,'先换个形象');nextHumanTurn(b,'确认');await assert.rejects(f.run('arena_confirm',{confirmation_id:pending.dialogue.confirmation_id},b),{code:'arena_human_confirmation_required'});
+  const c=f.agent('cancelled');await f.run('arena_start',{},c);const cancel=await f.run('arena_prepare',entry,c);await f.run('arena_stop',{},c);nextHumanTurn(c,'确认');await assert.rejects(f.run('arena_confirm',{confirmation_id:cancel.dialogue.confirmation_id},c),{code:'arena_confirmation_stale'});
+});
+
+test('catalog revision changes, expired confirmations and plugin-produced confirmation do not start a game',async t=>{
+  let now=1000;const f=fixture({}, {clock:()=>now});t.after(()=>f.host.dispose());
+  const a=f.agent('expires');await f.run('arena_start',{},a);const pending=await f.run('arena_prepare',entry,a);now+=300001;nextHumanTurn(a,'确认');await assert.rejects(f.run('arena_confirm',{confirmation_id:pending.dialogue.confirmation_id},a),{code:'arena_confirmation_stale'});
+  const b=f.agent('catalog');await f.run('arena_start',{},b);const proposal=await f.run('arena_prepare',entry,b);f.clients.at(-1).catalogValue.catalog_revision='new-catalog';nextHumanTurn(b,'确认');await assert.rejects(f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},b),{code:'arena_confirmation_stale'});
+  const c=f.agent('plugin-confirm');await f.run('arena_start',{},c);const automatic=await f.run('arena_prepare',entry,c);nextHumanTurn(c,'确认','plugin');await assert.rejects(f.run('arena_confirm',{confirmation_id:automatic.dialogue.confirmation_id},c),{code:'arena_human_authorization_required'});
+  assert.equal(f.runtimes.length,0);
+});
+
+test('a pre-existing server game is shown without queueing, arming or abandoning it',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('existing');await f.run('arena_start',{},a);f.clients[0].serverState='in_world';nextHumanTurn(a,'继续 Model行动');const status=await f.run('arena_start',{},a);
+  assert.equal(status.phase,'existing_game');assert.equal(status.native_loop.armed,false);assert.equal(f.runtimes.length,0);
+  await assert.rejects(f.run('arena_prepare',entry,a),{code:'arena_game_already_running'});
+});
+
+test('credential guards remain active while conversational onboarding yields for a human reply',async()=>{
+  const f=fixture({}, {qualified:false});const a=f.agent('guard-before-ticket');await f.run('arena_start',{},a);
+  assert.equal(f.globalGuards.length,1);assert.ok(f.globalGuards[0]({name:'bash',arguments:{command:'cat ~/.dsh/plugins/dsh-aea/*/*.json'}}));assert.equal(a.scopeState.restricted,false);
+  await f.host.dispose();assert.equal(f.globalGuards.length,0);
+});
+
+
+test('a pending native connection is replayed without asking the user for the same invite again',async t=>{
+  const f=fixture({}, {qualified:false,pending:true});t.after(()=>f.host.dispose());const a=f.agent('recover-native-pending');
+  const opened=await f.run('arena_start',{},a);assert.equal(opened.phase,'configuring');assert.equal(f.clients[0].nativeCalls.length,1);assert.equal(f.clients[0].nativeCalls[0].ticket,undefined);assert.equal(f.runtimes.length,0);
+});
+
+
+test('late configuration reads cannot overwrite a newer proposal and stop invalidates an in-flight confirm',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('configuration-race');await f.run('arena_start',{},a);const client=f.clients[0],catalog=structuredClone(client.catalogValue);let release;
+  client.catalog=()=>new Promise(resolve=>{release=()=>resolve(catalog)});
+  const old=f.run('arena_prepare',entry,a);await flush();client.catalog=async()=>catalog;
+  const current=await f.run('arena_prepare',{...entry,name:'新方案'},a);release();await assert.rejects(old,{code:'arena_configuration_changed'});
+  assert.equal((await f.run('arena_status',{},a)).dialogue.draft.name,'新方案');nextHumanTurn(a,'确认');
+  client.catalog=()=>new Promise(resolve=>{release=()=>resolve(catalog)});
+  const pending=f.run('arena_confirm',{confirmation_id:current.dialogue.confirmation_id},a);await flush();await f.run('arena_stop',{},a);release();await assert.rejects(pending,{code:'arena_confirmation_stale'});assert.equal(f.runtimes.length,0);
+});
+
+test('simultaneous replay of the same confirmed proposal starts one native runtime only',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('double-confirm');await f.run('arena_start',{},a);const proposal=await f.run('arena_prepare',entry,a);nextHumanTurn(a,'就这样');
+  const client=f.clients[0],catalog=structuredClone(client.catalogValue);let release;const gate=new Promise(resolve=>{release=resolve});client.catalog=async()=>{await gate;return catalog};
+  const first=f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a),second=f.run('arena_confirm',{confirmation_id:proposal.dialogue.confirmation_id},a);release();await Promise.all([first,second]);assert.equal(f.runtimes.length,1);
+});
+
+
+test('an expired browser-era control without reusable native access asks for an invite in chat',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('browser-control-expired');await f.run('arena_start',{},a);await f.run('arena_stop',{},a);
+  f.clients[0].nativeError=Object.assign(new Error('invite required'),{code:'invite_required'});nextHumanTurn(a,'开启 Model行动');
+  await assert.rejects(f.run('arena_start',{},a),{code:'invite_required'});const status=await f.run('arena_status',{},a);assert.equal(status.phase,'awaiting_ticket');assert.equal(status.native_loop.armed,false);assert.equal(f.runtimes.length,0);
+});
+
+async function existingGame(f, state='in_world') {
+  const a=f.agent('existing-'+state);await f.run('arena_start',{},a);
+  Object.assign(f.clients[0],{serverState:state,serverAttempt:{id:'old-attempt'}});
+  nextHumanTurn(a,'继续 Model行动');await f.run('arena_start',{},a);return a;
+}
+test('existing game stop requires current authentic explicit abandonment and does not revive gameplay',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=await existingGame(f);
+  for(const [text,source] of [['不要退出旧局','user'],['确认','user'],['stop writing','user'],['退出旧局','plugin']]){
+    nextHumanTurn(a,text,source);await assert.rejects(f.run('arena_stop',{abandon:true},a),{code:'arena_human_authorization_required'});
+  }
+  a.session.log.push({type:'turn/start',seq:a.session.log.length,data:{turn:99}});await assert.rejects(f.run('arena_stop',{abandon:true},a),{code:'arena_human_authorization_required'});
+  nextHumanTurn(a,'退出旧局');const still=await f.run('arena_stop',{abandon:false},a);
+  assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
+  assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
+  const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.0');
+  assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
+  nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
+});
+test('existing reservations withdraw before clearing attempt without mounting a runtime',async t=>{
+  for(const phase of ['queued','offered','waiting','countdown']){
+    const f=fixture();t.after(()=>f.host.dispose());const a=await existingGame(f,phase);
+    nextHumanTurn(a,'放弃旧局');const result=await f.run('arena_stop',{abandon:true},a);
+    assert.equal(result.exit_confirmed,true);assert.equal(result.reservation_state,'released');assert.equal(f.clients[0].withdrawals,1);assert.deepEqual(f.clients[0].cleared,['old-attempt']);assert.equal(f.runtimes.length,0);
   }
 });
-
-test('an idle status identifies the loaded Model行动 plugin without opening private identity files', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  const status = await f.run('arena_status', {}, f.agent('idle-status', { text: 'dsh-model-action' }));
-  assert.equal(status.plugin_loaded, true); assert.equal(status.plugin_name, 'dsh-model-action');
-  assert.equal(f.stores.length, 0);
-  for (const name of ['arena_start', 'arena_status', 'arena_repair_pairing']) assert.match(f.globals.get(name).description, /Model行动/);
-  assert.match(f.globals.get('arena_start').description, /配对码绝不是邀请码/);
-});
-
-test('invalid pairing feedback repairs a prior start after abort without restarting gameplay', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('pairing-feedback', { text: '开启model行动插件' });
-  await f.run('arena_start', {}, a);
-  await f.emit('session/event', a.session, { type: 'turn/end', data: { reason: { kind: 'aborted' } } });
-  assert.equal((await f.run('arena_status', {}, a)).native_loop.armed, false);
-  nextHumanTurn(a, '配对码无效');
-  const repaired = await f.run('arena_repair_pairing', {}, a);
-  assert.equal(repaired.pairing.user_code, 'FRESH-PAIR');
-  assert.equal(repaired.native_loop.armed, false); assert.equal(repaired.active, false);
-  assert.equal(f.runtimes[0].repairs, 1); assert.equal(f.runtimes.length, 1);
-  assert.equal(a.injections.length, 0); assert.equal(a.followups.length, 0);
-  await f.run('arena_repair_pairing', {}, a);
-  assert.equal(f.runtimes[0].repairs, 1, 'replaying the same human repair intent does not rotate another code');
-  await assert.rejects(f.run('arena_start', {}, a), { code: 'arena_human_authorization_required' });
-});
-
-test('repair requires a current human repair request and a prior start owned by this root agent', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  await assert.rejects(f.run('arena_repair_pairing', {}, f.agent('unstarted', { text: '配对码无效' })), { code: 'arena_pairing_repair_requires_prior_start' });
-  const a = f.agent('repair-authority'); await f.run('arena_start', {}, a);
-  nextHumanTurn(a, '配对码无效', 'plugin');
-  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_human_authorization_required' });
-  nextHumanTurn(a, '不要重新配对 Model行动');
-  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_authorization_required' });
-  nextHumanTurn(a, '今天天气如何');
-  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_authorization_required' });
-  await assert.rejects(f.run('arena_repair_pairing', {}, f.agent('repair-child', { root: false, text: '重新配对' })), { code: 'arena_root_agent_required' });
-});
-
-test('repair cannot replace an active/queued attempt, and explicit stop remains stopped after pairing repair', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('repair-in-world'); await f.run('arena_start', {}, a); f.runtimes[0].enter(); await flush();
-  nextHumanTurn(a, '刷新配对码');
-  await assert.rejects(f.run('arena_repair_pairing', {}, a), { code: 'arena_pairing_repair_unavailable' });
-  assert.equal(f.runtimes[0].repairs, undefined);
-  const b = f.agent('repair-after-explicit-stop'); await f.run('arena_start', {}, b); await f.run('arena_stop', {}, b);
-  nextHumanTurn(b, '重新配对');
-  const repaired = await f.run('arena_repair_pairing', {}, b);
-  assert.equal(repaired.active, false); assert.equal(repaired.native_loop.armed, false);
-  assert.equal(repaired.native_loop.stop_reason, 'user_stop');
-  assert.equal(b.scopeState.restricted, false); assert.equal(b.injections.length, 0);
-});
-
-test('concurrent repair calls share one flight and cannot race a new game start', async t => {
-  const f = fixture(); t.after(() => f.host.dispose());
-  const a = f.agent('repair-single-flight'); await f.run('arena_start', {}, a); nextHumanTurn(a, '重新配对 Model行动');
-  const runtime = f.runtimes[0], original = runtime.repairPairing.bind(runtime); let release;
-  runtime.repairPairing = async () => { await new Promise(resolve => { release = resolve; }); return original(); };
-  const first = f.run('arena_repair_pairing', {}, a); await flush();
-  const second = f.run('arena_repair_pairing', {}, a);
-  await assert.rejects(f.run('arena_start', {}, a), { code: 'arena_pairing_repair_in_progress' });
-  release(); await Promise.all([first, second]);
-  assert.equal(runtime.repairs, 1); assert.equal((await f.run('arena_status', {}, a)).native_loop.armed, false);
-});
-
-
-test('credential guards are installed before startup and removed when the host unloads', async () => {
-  const f = fixture();
-  assert.equal(f.globalGuards.length, 1);
-  const guard = f.globalGuards[0];
-  assert.match(guard({ name: 'bash', arguments: { command: 'cat ~/.dsh/plugins/dsh-aea/*/*.json' } }), /私有身份文件/);
-  assert.match(guard({ name: 'read_file', arguments: { path: '/tmp/model-action-native-host-fixture/plugins/dsh-model-action/id.json' } }), /私有身份文件/);
-  assert.equal(guard({ name: 'bash', arguments: { command: 'npm test' } }), undefined);
-  assert.equal(f.stores.length, 0);
-  await f.host.dispose(); assert.equal(f.globalGuards.length, 0);
+test('unconfirmed exits keep existing game blocked and ended sessions only fetch results',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=await existingGame(f);f.clients[0].exitUnconfirmed=true;
+  nextHumanTurn(a,'停止旧局');assert.equal((await f.run('arena_stop',{abandon:true},a)).exit_confirmed,false);
+  assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');await assert.rejects(f.run('arena_prepare',entry,a),{code:'arena_game_already_running'});
+  f.clients[0].serverState='ended';f.clients[0].serverResult={outcome:'extracted'};
+  const result=await f.run('arena_stop',{abandon:true},a);assert.equal(result.exit_confirmed,true);assert.equal(result.result.outcome,'extracted');assert.equal(f.runtimes.length,1);
+  const g=fixture();t.after(()=>g.host.dispose());const b=await existingGame(g,'waiting');g.clients[0].withdrawError=Object.assign(new Error('offline'),{code:'network_error'});nextHumanTurn(b,'退出旧局');
+  assert.equal((await g.run('arena_stop',{abandon:true},b)).exit_confirmed,false);assert.equal(g.clients[0].cleared,undefined);assert.equal((await g.run('arena_status',{},b)).phase,'existing_game');
 });

@@ -60,3 +60,16 @@ test('connected, expired, missing and malformed codes never become browser pairi
   const expired=onboardingView({pairing:{...pairing,expires_at_ms:1999}},options);
   assert.equal(expired.pairing,null);assert.equal(expired.pairing_code_expired,true);assert.equal(expired.expires_in_seconds,undefined);
 });
+
+
+test('native conversation asks for access in chat without exposing browser pairing as the default',()=>{
+  const v=onboardingView({onboarding_mode:'conversation',phase:'awaiting_ticket',pairing:{user_code:'ABCD123456',expires_at_ms:99999},lobby_url:'https://legacy.invalid/#pairing_code=ABCD123456'});
+  assert.equal(v.browser_required,false);assert.equal(v.pairing,null);assert.equal(v.lobby_url,undefined);assert.equal(v.pairing_code,undefined);
+  assert.ok(v.instructions[0].includes('本轮对话'));assert.ok(v.instructions[0].includes('arena_submit_invite'));assert.ok(!JSON.stringify(v).includes('ABCD123456'));
+});
+test('native confirmation instructions preserve the complete proposal and require the next human reply',()=>{
+  const summary='昵称：小鱼；形象：Qwen 娘；装备：步枪配置；模式：大逃杀；房间：自动匹配大逃杀房间。';
+  const v=onboardingView({onboarding_mode:'conversation',phase:'awaiting_confirmation',dialogue:{summary,confirmation_id:'public-confirmation'}});
+  assert.ok(v.instructions[0].includes(summary));assert.ok(v.instructions[1].includes('下一条消息'));assert.ok(v.instructions[1].includes('模型自己不能确认'));assert.equal(v.browser_required,false);
+  assert.ok(onboardingView({onboarding_mode:'conversation',phase:'ended'}).instructions[0].includes('不自动开始下一局'));
+});

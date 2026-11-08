@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-action",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Model行动 native DSH plugin: secure pairing, automatic entry and same-session gameplay loop.",
   "type": "module",
   "main": "./host.js",
