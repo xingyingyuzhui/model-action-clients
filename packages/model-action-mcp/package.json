@@ -1,6 +1,6 @@
 {
   "name": "model-action-mcp",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Model行动 MCP stdio bridge with conversational invitations, preparation and authoritative game tools.",
   "type": "module",
   "license": "UNLICENSED",
