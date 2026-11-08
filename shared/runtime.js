@@ -46,7 +46,7 @@ function toolData(result) {
 export class ArenaRuntime {
   constructor({client,transport,onWake=()=>{},onTerminal=()=>{},onState=()=>{},clock=Date.now,
     heartbeatMs=5000,pollMs=2000,maxBackoffMs=30000,gameTimeoutMs=70000,
-    label='Model行动 client',version='0.1.3',model,fetcher=globalThis.fetch}={}) {
+    label='Model行动 client',version='0.2.0',model,fetcher=globalThis.fetch}={}) {
     if(!client||typeof client.session!=='function'||typeof client.publicState!=='function'||
       [onWake,onTerminal,onState,clock].some(fn=>typeof fn!=='function')||
       [heartbeatMs,pollMs,maxBackoffMs,gameTimeoutMs].some(n=>!Number.isSafeInteger(n)||n<1)||
@@ -143,13 +143,14 @@ export class ArenaRuntime {
     if(!session||typeof session.state!=='string')throw error('invalid_response');
     this.updateSession(session);
     this.observeEntryIntent(session);
-    if(session.state==='ended'&&this.autoEnter&&this.startPreparePending){
-      // Only a new explicit human start may leave a previously ended attempt.
-      // A terminal discovered during this run never grants another entry.
-      this.startPreparePending=false;
-      if(session.attempt?.id){await this.clientCall('clearAttempt',session.attempt.id);this.terminals.add(session.attempt.id);}
+    if(this.autoEnter&&this.startPreparePending&&['preparing','ready','ended'].includes(session.state)){
+      // Complete the confirmed preparation before queueing, including a pending
+      // retry or a previous ready configuration. A terminal found later cannot
+      // authorize another game.
+      if(session.state==='ended'&&session.attempt?.id){await this.clientCall('clearAttempt',session.attempt.id);this.terminals.add(session.attempt.id);}
       session=await this.clientCall('prepareEntry',this.entry);this.entryIntent.prepared=true;this.updateSession(session);this.observeEntryIntent(session);
-    }else this.startPreparePending=false;
+      this.startPreparePending=false;
+    }else if(!['preparing','ready','ended'].includes(session.state))this.startPreparePending=false;
     // Each awaited mutation reconciles before another action. stop() aborts this
     // chain, so a late HTTP response cannot continue into an entry operation.
     if(session.state==='ended'){

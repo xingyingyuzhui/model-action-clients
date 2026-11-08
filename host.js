@@ -1,6 +1,6 @@
 // Native dsh adapter. Credentials stay in Client/Runtime closures; the official
 // Agent owns every model request, inbox continuation and cancellation.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { onboardingView } from './lib/onboarding.js';
@@ -8,7 +8,7 @@ import { installCredentialGuard } from './lib/credential-guard.js';
 
 export const name = 'model-action-native';
 export const inject = ['agents', 'tools'];
-const ARENA_NAMES = ['arena_start', 'arena_connect', 'arena_status', 'arena_repair_pairing', 'arena_stop'];
+const ARENA_NAMES = ['arena_start', 'arena_connect', 'arena_submit_invite', 'arena_prepare', 'arena_confirm', 'arena_status', 'arena_repair_pairing', 'arena_stop'];
 const HASH = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = error => /^[a-z][a-z0-9_]{0,63}$/.test(error?.code ?? '') ? error.code : 'arena_client_error';
@@ -43,15 +43,47 @@ function publicValue(value, depth = 0) {
     .map(([key, item]) => [key, publicValue(item, depth + 1)]));
   return value ?? null;
 }
-function entryOptions(args = {}) {
-  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['mode_id', 'room_id', 'name', 'loadout_id'].includes(k))) fail('arena_invalid_entry');
-  const mode_id = args.mode_id ?? 'extraction';
-  const room_id = args.room_id === undefined ? mode_id === 'extraction' ? 'public-1' : null : args.room_id;
-  if (!['extraction', 'battle_royale'].includes(mode_id) ||
-    (room_id !== null && !(mode_id === 'extraction' ? room_id === 'public-1' : /^br-[123]$/.test(room_id)))) fail('arena_invalid_entry');
-  if (args.name !== undefined && (typeof args.name !== 'string' || !args.name.trim() || args.name.length > 24 || /[\u0000-\u001f\u007f]/.test(args.name))) fail('arena_invalid_entry');
-  if (args.loadout_id !== undefined && !['rifle', 'smg', 'shotgun', 'armored'].includes(args.loadout_id)) fail('arena_invalid_entry');
-  return { mode_id, room_id, ...(args.name === undefined ? {} : { name: args.name.trim() }), ...(args.loadout_id === undefined ? {} : { loadout_id: args.loadout_id }) };
+const PREPARE_FIELDS = ['name', 'character_id', 'loadout_id', 'mode_id', 'room_id'];
+const CONFIRMATION_TTL = 300000;
+function emptyArguments(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length) fail('arena_invalid_entry');
+}
+function catalogOptions(catalog) {
+  const list = values => Array.isArray(values) ? values.filter(v => v && typeof v.id === 'string').map(v => ({ id: v.id, name: typeof v.name === 'string' ? v.name : v.id, enabled: v.enabled !== false })) : [];
+  const characters = list(catalog?.appearance?.character), loadouts = list(catalog?.loadouts);
+  const mode_ids = Array.isArray(catalog?.mode_ids) ? catalog.mode_ids.filter(v => ['extraction', 'battle_royale'].includes(v)) : [];
+  if (!characters.length || !loadouts.length || !mode_ids.length) fail('arena_catalog_unavailable');
+  return { catalog_revision: catalog.catalog_revision ?? null, characters, loadouts, modes: mode_ids.map(id => ({ id, name: id === 'extraction' ? '持久搜打撤' : '大逃杀' })), rooms: [
+    { id: 'public-1', mode_id: 'extraction', name: '公开持久房' },
+    ...[1, 2, 3].map(n => ({ id: 'br-' + n, mode_id: 'battle_royale', name: '大逃杀 ' + n + ' 号房' })),
+  ] };
+}
+function configuredEntry(args, catalog) {
+  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !PREPARE_FIELDS.includes(k)) || PREPARE_FIELDS.some(k => !Object.hasOwn(args, k))) fail('arena_configuration_incomplete');
+  const { name, character_id, loadout_id, mode_id, room_id } = args;
+  if (typeof name !== 'string' || !name.trim() || name.length > 24 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(name)) fail('arena_invalid_entry');
+  if (!catalog.characters.some(v => v.id === character_id && v.enabled) || !catalog.loadouts.some(v => v.id === loadout_id && v.enabled) || !catalog.modes.some(v => v.id === mode_id)) fail('arena_invalid_entry');
+  if (!(mode_id === 'battle_royale' && room_id === null) && !catalog.rooms.some(v => v.id === room_id && v.mode_id === mode_id)) fail('arena_invalid_entry');
+  return { name: name.trim(), character_id, loadout_id, mode_id, room_id };
+}
+function entrySummary(entry, catalog) {
+  const label = (values, id) => values.find(v => v.id === id)?.name ?? id;
+  return `昵称：${entry.name}；形象：${label(catalog.characters, entry.character_id)}；装备：${label(catalog.loadouts, entry.loadout_id)}；模式：${label(catalog.modes, entry.mode_id)}；房间：${entry.room_id === null ? '自动匹配大逃杀房间' : label(catalog.rooms, entry.room_id)}。`;
+}
+function inviteFromHuman(text, serverUrl) {
+  let decoded;
+  try { decoded = decodeURIComponent(text); } catch { decoded = text; }
+  const pattern = /(?<![A-Za-z0-9_-])model_beta_invite_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g;
+  const tickets = [...new Set(decoded.match(pattern) ?? [])];
+  if (tickets.length !== 1) fail(tickets.length ? 'arena_invite_ambiguous' : 'arena_invite_required');
+  const remainder = decoded.replace(pattern, '');
+  if (/不要|别用|不用|取消|do not|don't/i.test(remainder)) fail('arena_human_authorization_required');
+  for (const candidate of decoded.match(/https?:\/\/[^\s<>"'）]+/g) ?? []) {
+    if (!candidate.includes(tickets[0])) continue;
+    let url; try { url = new URL(candidate.replace(/[。！，,;；]+$/, '')); } catch { fail('arena_invite_invalid'); }
+    if (url.origin !== serverUrl || url.username || url.password) fail('arena_invite_origin_mismatch');
+  }
+  return tickets[0];
 }
 function currentHumanInput(agent) {
   // The latest authenticated human message in this turn is the sole authority.
@@ -91,8 +123,15 @@ export function installArenaHost(ctx, config, dependencies) {
     return agent;
   }
   function snapshot(state) {
-    return publicValue(onboardingView({ ...state?.runtime?.state?.(), plugin_loaded: true, plugin_name: 'dsh-model-action', server_url: cfg.serverUrl,
-      result: state?.result ?? state?.runtime?.state?.().result ?? null,
+    const runtime = state?.runtime?.state?.() ?? {};
+    const dialogue = state?.dialogue;
+    const phase = state?.armed ? runtime.phase : dialogue?.phase ?? 'idle';
+    return publicValue(onboardingView({ ...runtime, phase, onboarding_mode: 'conversation', plugin_loaded: true, plugin_name: 'dsh-model-action', server_url: cfg.serverUrl,
+      connected: state?.armed ? runtime.connected === true : dialogue?.connected === true,
+      ...(dialogue ? { dialogue: { phase, draft: dialogue.draft, summary: dialogue.summary, confirmation_id: dialogue.confirmation?.id ?? null,
+        confirmation_expires_at_ms: dialogue.confirmation?.expires ?? null, preferences: dialogue.preferences,
+        ...(['configuring', 'awaiting_confirmation'].includes(phase) ? { options: dialogue.catalog } : {}) } } : {}),
+      result: state?.result ?? runtime.result ?? null,
       native_loop: { armed: !!state?.armed, tool_calls: state?.calls ?? 0, continuations: state?.continuations ?? 0,
         stop_reason: state?.stopReason ?? null, max_seconds: cfg.maxSeconds, max_tool_calls: cfg.maxToolCalls, max_continuations: cfg.maxContinuations },
       ...(state?.lastError ? { host_error: { code: state.lastError } } : {}) }, { serverUrl: cfg.serverUrl, clock }));
@@ -108,8 +147,11 @@ export function installArenaHost(ctx, config, dependencies) {
     if (scope) await scope.dispose();
   }
   async function stop(state, reason = 'user_stop', { abandon = ['time_limit', 'budget_limit'].includes(reason), cancel = true, restoreScope = true, forceRestoreScope = false } = {}) {
-    if (!state) return { stopped: true, character_state: 'not_in_world' };
-    state.armed = false; state.generation++; state.stopReason = reason; clearTimeout(state.deadlineTimer); notify(state);
+    if (!state) return { stopped: true, character_state: 'unknown' };
+    const existingGameOnly = !state.runtime && state.dialogue?.phase === 'existing_game';
+    state.armed = false; state.generation++; state.dialogueRevision++; state.stopReason = reason; clearTimeout(state.deadlineTimer);
+    if (state.dialogue) { state.dialogue.confirmation = null; state.dialogue.phase = reason === 'server_terminal' ? 'ended' : 'stopped'; }
+    notify(state);
     if (cancel && state.agent.status === 'running') state.agent.cancel({ kind: 'parent' });
     if (state.stopFlight) return state.stopFlight;
     state.stopFlight = (async () => {
@@ -117,9 +159,60 @@ export function installArenaHost(ctx, config, dependencies) {
       try { result = await state.runtime?.stop(reason, { abandon }); }
       catch (e) { state.lastError = safeCode(e); result = { stopped: true, character_state: 'unknown' }; }
       if (restoreScope && (!state.terminalClosing || forceRestoreScope)) await removeScope(state);
-      return publicValue(result ?? { stopped: true, character_state: 'not_in_world' });
+      return publicValue(result ?? { stopped: true, character_state: existingGameOnly ? 'unknown' : 'not_in_world', ...(existingGameOnly ? { exit_confirmed: false } : {}) });
     })().finally(() => { state.stopFlight = null; });
     return state.stopFlight;
+  }
+  async function stopExistingGame(state, exec, abandon) {
+    exec.signal.throwIfAborted();
+    if (abandon) {
+      const { text } = currentHumanInput(exec.agent);
+      if (!/(?:放弃|退出|停止|结束).{0,16}(?:旧局|这局|本局|对局|游戏|Model行动)|(?:旧局|这局|本局|对局|游戏|Model行动).{0,16}(?:放弃|退出|停止|结束)|\b(?:abandon|quit|leave|stop)\s+(?:the\s+)?(?:old\s+|current\s+)?(?:game|match|arena|model[ _-]*action)\b/i.test(text) || /不要|不用|禁止|别|勿|不想|取消|do not|don't/i.test(text)) fail('arena_human_authorization_required');
+    }
+    if (state.stopFlight) return state.stopFlight;
+    const flight = (async () => {
+      let passive;
+      try {
+        const session = await state.client.session();
+        exec.signal.throwIfAborted();
+        const oldId = session.attempt?.id ?? session.attempt?.attempt_id;
+        let result;
+        if (session.state === 'ended') {
+          const terminalResult = session.result ?? (await state.client.result()).result;
+          if (!terminalResult) fail('arena_exit_unconfirmed');
+          if (oldId) await state.client.clearAttempt(oldId);
+          result = { stopped: true, character_state: 'ended', terminal_confirmed: true, result: terminalResult };
+        } else if (session.state === 'in_world') {
+          if (!abandon) return { stopped: true, character_state: 'still_in_world', entry_state: session.state, exit_confirmed: false };
+          // This observer owns no agent scope, continuation or game entry intent.
+          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.0', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
+          await passive.start({ autoEnter: false });
+          result = await passive.stop('user_stop', { abandon: true });
+          if (result.terminal_confirmed !== true || result.character_state !== 'ended') return publicValue({ ...result, exit_confirmed: false });
+        } else if (['queued', 'offered', 'waiting', 'countdown'].includes(session.state)) {
+          if (!abandon) return { stopped: true, character_state: 'not_in_world', reservation_state: 'still_reserved', entry_state: session.state, exit_confirmed: false };
+          const withdrawn = await state.client.withdrawEntry();
+          if (!['preparing', 'ready', 'ended'].includes(withdrawn.state)) fail('arena_exit_unconfirmed');
+          if (oldId) await state.client.clearAttempt(oldId);
+          result = { stopped: true, character_state: 'not_in_world', reservation_state: 'released', entry_state: withdrawn.state };
+        } else if (['preparing', 'ready'].includes(session.state)) {
+          if (oldId) await state.client.clearAttempt(oldId);
+          result = { stopped: true, character_state: 'not_in_world', entry_state: session.state };
+        } else fail('arena_exit_unconfirmed');
+        state.dialogueRevision++; state.generation++; state.stopReason = 'user_stop'; state.lastError = null;
+        state.dialogue.confirmation = null; state.dialogue.draft = null; state.dialogue.summary = null;
+        state.dialogue.phase = result.character_state === 'ended' ? 'ended' : 'stopped';
+        if (result.result) state.result = publicValue(result.result);
+        return publicValue({ ...result, exit_confirmed: true });
+      } catch (error) {
+        state.lastError = safeCode(error);
+        return { stopped: true, character_state: 'unknown', exit_confirmed: false, error: { code: state.lastError } };
+      } finally {
+        if (passive?.state().active) await passive.stop('user_stop', { abandon: false }).catch(() => {});
+      }
+    })();
+    state.stopFlight = flight;
+    try { return await flight; } finally { if (state.stopFlight === flight) state.stopFlight = null; }
   }
   function message(state, reason) {
     return createUserMessage({ source: { kind: 'dsh-model-action', purpose: 'arena-native-loop' },
@@ -222,20 +315,97 @@ export function installArenaHost(ctx, config, dependencies) {
       calls: 0, continuations: 0, enteredAt: null, result: null, terminalClosing: false, waiters: new Set(), lastAuthorization: -1,
       stopFlight: null, stopReason: null, generation: 0, activation: null, activationGeneration: null,
       bridgeFlight: null, bridgeReady: false, bridgeGeneration: null, gameNames: new Set(), pendingMessage: null,
-      lastRepairAuthorization: -1, repairFlight: null };
+      lastRepairAuthorization: -1, repairFlight: null,
+      dialogue: { phase: 'idle', connected: false, catalog: null, draft: null, summary: null, confirmation: null, preferences: null }, dialogueFlight: null, dialogueRevision: 0, confirmedId: null };
     states.set(agent, state); return state;
   }
+  async function loadAccess(state, exec, ticket) {
+    const generation = state.generation, dialogue = state.dialogue;
+    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.0' });
+    exec.signal.throwIfAborted(); if (state.generation !== generation || state.dialogue !== dialogue || disposed) fail('arena_dialogue_cancelled');
+    const local = await state.client.publicState();
+    state.dialogue.connected = true;
+    const profile = (local.profiles ?? []).find(p => p.saved);
+    state.dialogue.preferences = local.entry_preferences ?? (profile ? { ...(profile.name ? { name: profile.name } : {}), ...(profile.appearance?.character ? { character_id: profile.appearance.character } : {}) } : null);
+    state.dialogue.catalog = catalogOptions(await state.client.catalog());
+    exec.signal.throwIfAborted(); if (state.generation !== generation || state.dialogue !== dialogue || disposed) fail('arena_dialogue_cancelled');
+    state.dialogue.phase = ['queued', 'offered', 'waiting', 'countdown', 'in_world'].includes(native.session?.state) ? 'existing_game' : 'configuring';
+    state.lastError = null; return snapshot(state);
+  }
   async function start(args, exec) {
-    const agent = caller(exec.agent); exec.signal.throwIfAborted();
+    const agent = caller(exec.agent); exec.signal.throwIfAborted(); emptyArguments(args);
     let state = states.get(agent);
-    if (state?.repairFlight) fail('arena_pairing_repair_in_progress');
     if (state?.armed) return snapshot(state);
     const authorization = humanAuthorization(agent);
-    if (state && authorization <= state.lastAuthorization) fail('arena_new_human_start_required');
-    const entry = entryOptions(args);
     state ??= makeState(agent);
+    if (state.dialogueFlight) return state.dialogueFlight;
+    if (authorization === state.lastAuthorization && ['awaiting_ticket','configuring','awaiting_confirmation','existing_game'].includes(state.dialogue.phase)) return snapshot(state);
     if (state.stopFlight) await state.stopFlight;
-    state.lastAuthorization = authorization; state.entry = entry; state.armed = true;
+    state.lastAuthorization = authorization; state.result = null; state.confirmedId = null; state.lastError = null; state.dialogueRevision++;
+    state.dialogue = { phase: 'awaiting_ticket', connected: false, catalog: null, draft: null, summary: null, confirmation: null, preferences: null };
+    const flight = (async () => {
+      const local = await state.client.publicState(); exec.signal.throwIfAborted();
+      if (local.connected || local.access_credential_saved || local.native_connect_pending) return loadAccess(state, exec);
+      return snapshot(state);
+    })();
+    state.dialogueFlight = flight;
+    try { return await flight; }
+    catch (error) { state.lastError = safeCode(error); if (state.dialogue.phase !== 'stopped') state.dialogue.phase = /invite_required|invalid_native_invite/.test(state.lastError) || ([403,410].includes(error?.status) && /invite|grant|access/.test(state.lastError)) ? 'awaiting_ticket' : 'access_error'; fail(state.lastError); }
+    finally { if (state.dialogueFlight === flight) state.dialogueFlight = null; }
+  }
+  async function submitInvite(args, exec) {
+    const agent = caller(exec.agent); exec.signal.throwIfAborted(); emptyArguments(args);
+    const state = states.get(agent); if (!state || state.lastAuthorization < 0) fail('arena_dialogue_not_started');
+    if (state.armed || state.dialogue.phase === 'existing_game') fail('arena_game_already_running');
+    const human = currentHumanInput(agent); if (human.seq < state.lastAuthorization) fail('arena_human_authorization_required');
+    const ticket = inviteFromHuman(human.text, cfg.serverUrl);
+    if (state.dialogueFlight) return state.dialogueFlight;
+    state.dialogue.confirmation = null;
+    const flight = loadAccess(state, exec, ticket); state.dialogueFlight = flight;
+    try { return await flight; }
+    catch (error) { state.lastError = safeCode(error); if (state.dialogue.phase !== 'stopped') state.dialogue.phase = /invite_required|invalid_native_invite/.test(state.lastError) || ([403,410].includes(error?.status) && /invite|grant|access/.test(state.lastError)) ? 'awaiting_ticket' : 'access_error'; fail(state.lastError); }
+    finally { if (state.dialogueFlight === flight) state.dialogueFlight = null; }
+  }
+  async function prepare(args, exec) {
+    const agent = caller(exec.agent); exec.signal.throwIfAborted();
+    const state = states.get(agent); if (!state || state.lastAuthorization < 0) fail('arena_dialogue_not_started');
+    if (state.armed || state.dialogue.phase === 'existing_game') fail('arena_game_already_running');
+    if (!state.dialogue.connected || !state.dialogue.catalog) fail('arena_access_required');
+    const human = currentHumanInput(agent);
+    if (human.seq < state.lastAuthorization) fail('arena_human_authorization_required');
+    const revision = ++state.dialogueRevision;
+    state.dialogue.confirmation = null;
+    const catalog = catalogOptions(await state.client.catalog());
+    exec.signal.throwIfAborted();
+    if (state.dialogueRevision !== revision || state.armed || disposed) fail('arena_configuration_changed');
+    const entry = configuredEntry(args, catalog);
+    const id = HASH(JSON.stringify({ entry, revision: catalog.catalog_revision, nonce: randomBytes(24).toString('hex') }));
+    state.dialogue.catalog = catalog; state.dialogue.draft = entry; state.dialogue.summary = entrySummary(entry, catalog);
+    state.dialogue.confirmation = { id, humanSeq: human.seq, entry: copy(entry), expires: clock() + CONFIRMATION_TTL, catalogRevision: catalog.catalog_revision };
+    state.dialogue.phase = 'awaiting_confirmation'; state.lastError = null; return snapshot(state);
+  }
+  async function confirm(args, exec) {
+    const agent = caller(exec.agent); exec.signal.throwIfAborted();
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => k !== 'confirmation_id') || typeof args.confirmation_id !== 'string') fail('arena_invalid_confirmation');
+    const state = states.get(agent); if (!state) fail('arena_dialogue_not_started');
+    if (state.armed && state.confirmedId === args.confirmation_id) return snapshot(state);
+    const pending = state.dialogue.confirmation;
+    if (!pending || pending.id !== args.confirmation_id || pending.expires <= clock()) fail('arena_confirmation_stale');
+    const human = currentHumanInput(agent);
+    const followingHumans = state.agent.session.log.filter(event => event.type === 'user/message' && event.data?.source?.kind === 'user' && event.seq > pending.humanSeq);
+    const text = human.text.replace(/[\s。！!？?，,.]/g, '');
+    if (human.seq <= pending.humanSeq || followingHumans.length !== 1 || followingHumans[0].seq !== human.seq || !/^(?:确认|确认开始|确认开局|确认入场|确认开始游戏|就这样|就这样开始|可以开始|可以开局|可以入场|开始吧|好|好的|行|没问题|按这个来|yes|confirm)$/i.test(text)) fail('arena_human_confirmation_required');
+    const currentCatalog = catalogOptions(await state.client.catalog());
+    exec.signal.throwIfAborted();
+    if (currentCatalog.catalog_revision !== pending.catalogRevision || JSON.stringify(state.dialogue.draft) !== JSON.stringify(pending.entry)) { state.dialogue.confirmation = null; fail('arena_confirmation_stale'); }
+    if (state.armed && state.confirmedId === args.confirmation_id) return snapshot(state);
+    if (state.dialogue.confirmation !== pending || state.armed) fail('arena_confirmation_stale');
+    state.entry = copy(pending.entry); state.dialogue.confirmation = null; state.confirmedId = pending.id; state.armed = true;
+    state.dialogue.phase = 'starting';
+    return activate(state, exec);
+  }
+  async function activate(state, exec) {
+    const entry = state.entry;
     const generation = ++state.generation;
     state.calls = 0; state.continuations = 0; state.enteredAt = null; state.result = null; state.terminalClosing = false;
     state.stopReason = null; state.lastError = null; state.bridgeReady = false; state.bridgeFlight = null;
@@ -244,18 +414,8 @@ export function installArenaHost(ctx, config, dependencies) {
     const cancelled = () => { if (state.generation === generation) void stop(state, 'user_stop', { cancel: false }); };
     exec.signal.addEventListener('abort', cancelled, { once: true });
     try {
-      // A saved control lease can expire at a server restart. Only a confirmed
-      // control-endpoint 401 permits reset; network/MCP failures never rebind.
-      const local = await state.client.publicState();
-      if (local.connected) {
-        try { await state.client.session(); }
-        catch (e) {
-          if (e.status !== 401) throw e;
-          await state.client.resetConnection();
-        }
-      }
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.1.3',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.0',
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });
@@ -294,15 +454,18 @@ export function installArenaHost(ctx, config, dependencies) {
     finally { if (state.repairFlight === flight) state.repairFlight = null; }
   }
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
-  const parameters = { mode_id: { type: 'string', enum: ['extraction', 'battle_royale'] }, room_id: { type: 'json' }, name: { type: 'string' }, loadout_id: { type: 'string', enum: ['rifle', 'smg', 'shotgun', 'armored'] } };
+  const parameters = { name: { type: 'string' }, character_id: { type: 'string' }, loadout_id: { type: 'string' }, mode_id: { type: 'string', enum: ['extraction', 'battle_royale'] }, room_id: { type: 'json' } };
   const definitions = [
-    defineTool({ name: 'arena_start', description: '开启/启动 Model行动 游戏插件并按当前用户指令入场。插件已加载，无需 Bash 查找或读取配置。返回 instructions 中的准确配对步骤：用户先用服务器邀请码进入大厅，再把 pairing.user_code 填到「插件显示的公开配对码」框并批准；配对码绝不是邀请码。不得读取、打印、修改或删除私有身份文件，凭证由插件管理。', parameters, output, execute: start }),
-    defineTool({ name: 'arena_connect', description: '连接或恢复用户明确要求的 Model行动 游戏；与 arena_start 相同。按返回的 instructions 给用户配对指导，私密凭证不进入对话。若用户只反馈「配对码无效」，使用 arena_repair_pairing，不要读写身份文件。', parameters, output, execute: start }),
-    defineTool({ name: 'arena_status', description: '检查 Model行动 插件是否已加载、当前配对/入场状态、预算和真实结果。直接使用此工具诊断，不需 Bash 翻源码或私有文件。返回 instructions 提供邀请码与配对码的分步说明、准确到期时间；不能凭未连接状态断言服务端已作废配对码。', parameters: {}, output,
+    defineTool({ name: 'arena_start', description: '开启 Model行动 的纯对话备赛。只检查已保存资格并显示安全配置选项；缺少资格时向用户索取邀请码或完整邀请链接，不生成网页配对码、不默认开局。接着收集昵称、模型少女形象、装备、模式和房间，调用 arena_prepare 展示完整摘要，等下一条真人确认后才 arena_confirm。禁止翻私有文件。', parameters: {}, output, execute: start }),
+    defineTool({ name: 'arena_connect', description: '与 arena_start 相同：打开 Model行动 对话准备、复用有效本地资格，不直接排队开局。', parameters: {}, output, execute: start }),
+    defineTool({ name: 'arena_submit_invite', description: '用户在本轮对话提供 Model行动 邀请码或完整邀请链接后调用，无参数。插件直接读取这条真人消息完成资格授权；不要将邀请码复制到工具参数、返回结果或回复，不需要用户打开网页。', parameters: {}, output, execute: submitInvite }),
+    defineTool({ name: 'arena_prepare', description: '收集完整配置后提出备赛方案：name昵称、character_id模型少女形象、loadout_id装备、mode_id模式、room_id房间（大逃杀null自动匹配）。只保存方案并返回中文摘要和confirmation_id，不开局。必须把摘要告知用户，等待下一条真人明确确认；更改配置必须重新调用。', parameters, output, execute: prepare }),
+    defineTool({ name: 'arena_confirm', description: '仅在上一份完整备赛摘要之后的下一条真人消息明确说“确认/就这样/可以开始”等时调用，传入那份confirmation_id，才正式入场并开启原生持续游玩。模型自己确认、同一条旧消息、否定/改配置/过期ID一律无效。', parameters: { confirmation_id: { type: 'string' } }, output, execute: confirm }),
+    defineTool({ name: 'arena_status', description: '检查 Model行动 对话阶段、已保存方案、确认状态和权威游戏结果，不暴露凭证。无需 Bash 翻源码或身份文件。', parameters: {}, output,
       execute: (_args, exec) => { const agent = caller(exec.agent); return snapshot(states.get(agent)); } }),
-    defineTool({ name: 'arena_repair_pairing', description: '修复本会话此前启动的 Model行动 配对。用户反馈「配对码无效」「重新配对」「刷新配对码」即可，无需重复游戏名。仅重新申请公开配对码、保留档案，不开始游戏、不恢复已停止的游玩循环；连接有效或已有对局时拒绝。不得用 Bash 删除身份文件。', parameters: {}, output, execute: repairPairing }),
-    defineTool({ name: 'arena_stop', description: 'Stop this native arena loop. abandon=false stops decisions while the server character can remain alive; abandon=true explicitly requests surrender. Never claims terminal without server confirmation.', parameters: { abandon: { type: 'boolean' } }, output,
-      execute: async (args, exec) => { const agent = caller(exec.agent); if (args.abandon !== undefined && typeof args.abandon !== 'boolean') fail('arena_invalid_entry'); return stop(states.get(agent), 'user_stop', { abandon: args.abandon === true, cancel: false }); } }),
+    defineTool({ name: 'arena_repair_pairing', description: '显式兼容旧网页配对的修复工具，新版纯对话备赛无需调用。只修复此前开始但未入场的旧配对，不自动开局，不删除身份文件。', parameters: {}, output, execute: repairPairing }),
+    defineTool({ name: 'arena_stop', description: '停止 Model行动 并取消未确认方案。abandon=false只停决策、角色可能仍在场；abandon=true显式请求放弃，以服务器结果确认退出。', parameters: { abandon: { type: 'boolean' } }, output,
+      execute: async (args, exec) => { const agent = caller(exec.agent); if (args.abandon !== undefined && typeof args.abandon !== 'boolean') fail('arena_invalid_entry'); const state = states.get(agent); return !state?.runtime && state?.dialogue.phase === 'existing_game' ? stopExistingGame(state, exec, args.abandon === true) : stop(state, 'user_stop', { abandon: args.abandon === true, cancel: false }); } }),
   ];
   const disposers = definitions.map(def => ctx.tools.register(def));
   function waitForState(state, signal, duration) {
