@@ -67,8 +67,18 @@ try{
  const gameNames=(await connection.client.listTools()).tools.map(t=>t.name);
  check('real entry publishes dynamic authoritative game tools',gameNames.includes('game_step')&&gameNames.includes('game_observe_compact')&&notifications>0);
  const observation=decode(await call('game_observe_compact'));
- const snapshot=await (await fetch(origin+'/agent-arena/rooms/public-1/spectator/v2/snapshot')).json();
+ let snapshot;
+ for(let n=0;n<50;n++){
+  const response=await fetch(origin+'/agent-arena/rooms/public-1/spectator/v2/snapshot'),value=await response.json();
+  if(response.status===503&&value.error?.code==='buffering'){await wait(200);continue;}
+  assert.equal(response.status,200);if(value.participants?.some(p=>p.name===entry.name)){snapshot=value;break;}await wait(200);
+ }
+ assert.ok(snapshot,'delayed spectator never published the configured character');
  check('configured character actually enters the authoritative world',observation.self?.hp>0&&manager.room('public-1').players_active===1&&snapshot.participants.some(p=>p.name===entry.name&&p.appearance.character==='deepseek'));
+ const hinted=await call('arena_status');
+ check('MCP guidance advertises early return on the capable server',hinted.instructions.some(text=>text.includes('return_after_ms')));
+ const early=decode(await call('game_step',{input:{hold_ms:1000},return_after_ms:300,stop_on_event:false,client_cmd_id:'mcp-native-early-step'}));
+ check('real MCP step returns before the held action expires',early.execution?.stop_reason==='return_after'&&early.execution.completed===false&&early.execution.input_valid_until_tick>early.tick);
  await call('game_step',{input:{right:true,hold_ms:100},client_cmd_id:'mcp-native-first-step'});
  await call('game_abandon');const terminal=await statusUntil('ended');
  check('first match ends only on authoritative result',terminal.result?.outcome==='abandoned');

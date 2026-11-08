@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.3.tgz
+npm install -g ./model-action-mcp-0.2.4.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.3.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.3/model-action-mcp-0.2.3.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.4/model-action-mcp-0.2.4.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -77,3 +77,7 @@ CLI支持 `--server-url`、`--session`、`--state-dir`，对应 `MODEL_ACTION_SE
 当服务器明确发布公开准入模式时，DSH和MCP会自动跳过邀请码，直接进入对话备战；仍由用户选择配置并确认首次入场，后续可以沿用已确认配置。开放访客不占原内测邀请名额，房间满员仍正常排队。
 
 恢复邀请码模式后，已入战的当前局和结算可以完成；访客开始新局需要有效邀请。旧身份、配置和恢复证明会保留。公开模式的策略探测失败不会被当成开放，不会用公开连接绕过身份删除或占用限制。
+
+## 提前返回提示（0.2.4）
+
+服务器声明 `step.return_after_ms` 能力后，客户端会提示 Agent 使用 `hold_ms:1000` 配合 `return_after_ms:300~500`，在按键仍生效时开始下一轮决策。此提示同时适用于原生 DSH 插件和标准 MCP；旧服务器仍可正常使用。
