@@ -202,7 +202,7 @@ export function installArenaHost(ctx, config, dependencies) {
         } else if (session.state === 'in_world') {
           if (!abandon) return { stopped: true, character_state: 'still_in_world', entry_state: session.state, exit_confirmed: false };
           // This observer owns no agent scope, continuation or game entry intent.
-          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.2', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
+          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.3', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
           await passive.start({ autoEnter: false });
           result = await passive.stop('user_stop', { abandon: true });
           if (result.terminal_confirmed !== true || result.character_state !== 'ended') return publicValue({ ...result, exit_confirmed: false });
@@ -339,7 +339,7 @@ export function installArenaHost(ctx, config, dependencies) {
   }
   async function loadAccess(state, exec, ticket) {
     const generation = state.generation, dialogue = state.dialogue;
-    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.2' });
+    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.3' });
     exec.signal.throwIfAborted(); if (state.generation !== generation || state.dialogue !== dialogue || disposed) fail('arena_dialogue_cancelled');
     const local = await state.client.publicState();
     state.dialogue.connected = true;
@@ -374,9 +374,12 @@ export function installArenaHost(ctx, config, dependencies) {
     state.lastAuthorization = authorization; state.result = null; state.confirmedId = null; state.lastError = null; state.dialogueRevision++;
     state.dialogue = { phase: 'awaiting_ticket', connected: false, catalog: null, draft: null, summary: null, confirmation: null, preferences: null };
     const flight = (async () => {
-      const local = await state.client.publicState(); exec.signal.throwIfAborted();
-      if (local.connected || local.access_credential_saved || local.native_connect_pending) {
-        await loadAccess(state, exec);
+      try { await loadAccess(state, exec); }
+      catch(error) {
+        if(!['invite_required','native_access_required'].includes(error?.code))throw error;
+        exec.signal.throwIfAborted();state.dialogue.phase='awaiting_ticket';state.dialogue.connected=false;state.lastError=null;
+        return snapshot(state);
+      }
         const entry = state.lastConfirmedEntry;
         if (state.dialogue.phase === 'configuring' && entry && entryIntent(human.text, { catalog: state.dialogue.catalog, entry }).play) {
           state.dialogue.draft = copy(entry); state.dialogue.summary = entrySummary(entry, state.dialogue.catalog);
@@ -384,8 +387,6 @@ export function installArenaHost(ctx, config, dependencies) {
           return launchConfirmed(state, entry, human, exec);
         }
         return snapshot(state);
-      }
-      return snapshot(state);
     })();
     state.dialogueFlight = flight;
     try { return await flight; }
@@ -501,7 +502,7 @@ export function installArenaHost(ctx, config, dependencies) {
     exec.signal.addEventListener('abort', cancelled, { once: true });
     try {
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.2',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.3',
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });

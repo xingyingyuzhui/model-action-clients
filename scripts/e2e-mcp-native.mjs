@@ -12,7 +12,8 @@ import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import {ElicitRequestSchema,ToolListChangedNotificationSchema} from '@modelcontextprotocol/sdk/types.js';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
-if(args.length!==2||args[0]!=='--game-dir')throw Error('usage: --game-dir /absolute/agent-extraction-arena');
+const publicMode=args[2]==='--open';
+if(![2,3].includes(args.length)||args[0]!=='--game-dir'||args.length===3&&!publicMode)throw Error('usage: --game-dir /absolute/agent-extraction-arena');
 const game=path.resolve(args[1]);
 const [{RoomManager},{ArenaLobby},{ProfileStore},{RankingStore},{BetaAccessStore},{createArenaServer},{listen}]=await Promise.all(['rooms/manager.js','arena/lobby.js','profiles/store.js','rankings/store.js','beta/store.js','arena/http.js','server.js'].map(name=>import(pathToFileURL(path.join(game,'src',name)))));
 const out=path.join(root,'evidence','mcp-native-'+new Date().toISOString().replace(/[:.]/g,'-'));
@@ -48,7 +49,7 @@ async function statusUntil(expected){
  throw Error('state_timeout_'+expected);
 }
 try{
- const access=new BetaAccessStore({dir:path.join(temporary,'beta')});const ticket=access.createInvites({count:1})[0].ticket;
+ const access=new BetaAccessStore({dir:path.join(temporary,'beta')});if(publicMode){access.createInvites({count:20});access.setAdmissionMode('open');}const ticket=publicMode?null:access.createInvites({count:1})[0].ticket;
  manager=new RoomManager({dataDir:path.join(temporary,'rooms'),invite:'unused-local-fixture',seed:'mcp-native-e2e',world:{npcTarget:0,airdrops:false}});await manager.start();
  lobby=new ArenaLobby(manager,{access,invite:'unused-local-fixture',profiles:new ProfileStore(path.join(temporary,'profiles')),rankings:new RankingStore(path.join(temporary,'rankings'))});
  server=createArenaServer(lobby);server.prependListener('request',req=>routes.push({stage,path:new URL(req.url,'http://local').pathname}));
@@ -56,8 +57,8 @@ try{
  stage=1;connection=await open(origin,true);
  const names=(await connection.client.listTools()).tools.map(t=>t.name);
  check('conversation controls replace browser repair and include invitation, character preparation and confirmation',names.includes('arena_submit_invite')&&names.includes('arena_prepare')&&names.includes('arena_confirm')&&!names.includes('arena_repair_pairing'));
- const start=await call('arena_start');check('first start only requests an invitation inside the conversation',start.phase==='awaiting_ticket'&&start.browser_required===false&&!routes.some(r=>/queue|\/prepare$/.test(r.path)));
- await call('arena_submit_invite',{invitation:origin+'/agent-arena/lobby/#invite='+ticket});
+ const start=await call('arena_start');check(publicMode?'open admission skips the invitation and reaches configuration':'first start only requests an invitation inside the conversation',(publicMode?start.phase==='configuring':start.phase==='awaiting_ticket')&&start.browser_required===false&&!routes.some(r=>/queue|\/prepare$/.test(r.path)));
+ if(!publicMode)await call('arena_submit_invite',{invitation:origin+'/agent-arena/lobby/#invite='+ticket});
  const entry={name:'MCP实测',character_id:'deepseek',loadout_id:'rifle',mode_id:'extraction',room_id:'public-1'};
  const proposal=await call('arena_prepare',entry);
  check('all five choices remain local until confirmation',!!proposal.dialogue?.confirmation_id&&!routes.some(r=>r.path==='/client/v2/prepare'));
@@ -85,8 +86,14 @@ try{
  await call('arena_stop',{abandon:true});const ended=await statusUntil('ended');
  for(let n=0;n<30&&manager.room('public-1').players_active;n++)await wait(100);
  check('explicit stop confirms the second terminal and frees the player seat',ended.result?.outcome==='abandoned'&&manager.room('public-1').players_active===0);
+ if(publicMode){
+  access.setAdmissionMode('invite');const queued=routes.filter(r=>r.path==='/client/v2/queue').length;
+  const blocked=await call('arena_start',{reuse_previous:true});
+  check('restoring invitations blocks a guest new match while retaining its result',blocked.phase==='awaiting_ticket'&&routes.filter(r=>r.path==='/client/v2/queue').length===queued);
+  check('public visitors never consume any of the twenty reserved invitation slots',access.status().reserved_slots===20);
+ }
  const privateState=JSON.parse(fs.readFileSync(fs.readdirSync(stateDir,{recursive:true}).map(n=>path.join(stateDir,n)).find(p=>p.endsWith('.json'))));
- const privateValues=[ticket];
+ const privateValues=ticket?[ticket]:[];
  function secrets(v){if(v&&typeof v==='object')for(const [key,item]of Object.entries(v)){if(/token|secret|receipt/i.test(key)&&typeof item==='string')privateValues.push(item);else secrets(item);}}
  secrets(privateState);
  check('tool outputs never echo invitation or long-term proofs',privateValues.every(value=>!JSON.stringify(outputs).includes(value)));
@@ -95,7 +102,7 @@ try{
 }catch(cause){errors.push(String(cause.code??cause.message));process.exitCode=1;}
 finally{
  await connection?.close().catch(()=>{});lobby?.stop();server?.closeAllConnections();server?.close();await manager?.stop();
- fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({label:'Official MCP stdio Client/Server and four real isolated workers, explicit host calls, no LLM',checks,errors,routes,forms,invitation_passes_through_tool_arguments:true,paid_model_calls:0,new_production_matches:0},null,2)+'\n',{mode:0o600});
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({label:'Official MCP stdio Client/Server and four real isolated workers, explicit host calls, no LLM',checks,errors,routes,forms,invitation_passes_through_tool_arguments:!publicMode,paid_model_calls:0,new_production_matches:0},null,2)+'\n',{mode:0o600});
  fs.rmSync(temporary,{recursive:true,force:true});
 }
 const passed=checks.length>0&&checks.every(c=>c.pass)&&errors.length===0;
