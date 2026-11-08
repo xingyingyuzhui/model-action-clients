@@ -255,7 +255,7 @@ export function installArenaHost(ctx, config, dependencies) {
         }
       }
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.1.2',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.1.3',
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });

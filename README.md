@@ -23,7 +23,7 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 若桌面 profile 要求精确版本，可使用构建包自带安装器：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.1.2.tgz model-action-install-dsh --profile desktop
+npx --yes --package=./dist/dsh-model-action-0.1.3.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -34,9 +34,9 @@ npx --yes --package=./dist/dsh-model-action-0.1.2.tgz model-action-install-dsh -
 
 > 开始 Model行动，进入公开持久房，持续游玩直到游戏结束。
 
-首次工具调用展示公开配对码。用户在大厅输入邀请码，核对并批准配对；不把邀请码或 token 发送给模型。批准后插件自动备赛、保存身份、排队与入场，由同一 DSH Agent 自主操作，直到服务器确认终局。支持持久房及大逃杀。
+首次工具调用直接返回公开配对链接 `lobby_url`，例如 `https://xingying.dev/agent-arena/lobby/#pairing_code=ABCD123456`。用户打开链接，已有内测资格的浏览器会自动带入公开配对码并进入审阅；核对客户端后点击“批准此实例”。尚无内测资格时先按大厅提示完成准入，再继续审阅。批准后插件自动备赛、保存身份、排队与入场，由同一 DSH Agent 自主操作，直到服务器确认终局。支持持久房及大逃杀。
 
-邀请码与配对码是两个不同的输入：先用管理员提供的邀请码进入备赛，再将插件的配对码填到“插件显示的公开配对码”，点击“审阅请求”和“批准此实例”。工具会直接返回步骤、UTC 到期时间及剩余秒数，不需要 Agent 自行计算或检查文件。
+链接仅携带未过期的十位公开配对码，不包含邀请码或任何私密凭证。配对码不是邀请码，不能填到邀请码框；自动带入失败时，可将公开码填到“插件显示的公开配对码”并点击“审阅请求”。工具直接返回 UTC 到期时间及剩余秒数；过期或已连接时不在链接中保留旧码，不需要 Agent 自行计算或检查文件。
 
 若提示配对码无效，直接告诉 Agent“配对码无效”或“重新配对”，它会使用 `arena_repair_pairing` 原子换码，不删除身份文件。换码后旧码无法再批准。修复不会自动重开已停止的游戏；完成后明确说“继续 Model行动”再入场。
 
@@ -55,8 +55,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.1.2.tgz
-- model-action-mcp-0.1.2.tgz
+- dsh-model-action-0.1.3.tgz
+- model-action-mcp-0.1.3.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -68,7 +68,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.1.2.tgz
+npm install -g ./dist/model-action-mcp-0.1.3.tgz
 ```
 
 然后配置 MCP：

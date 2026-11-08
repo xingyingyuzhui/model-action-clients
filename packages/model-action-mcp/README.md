@@ -9,7 +9,7 @@ Model行动的标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户�
 从仓库运行 `npm run pack`，或在 GitHub Actions 下载构建产物。安装标准 npm 格式包，不需要发布到 Registry：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.1.2.tgz
+npm install -g ./dist/model-action-mcp-0.1.3.tgz
 model-action-mcp --help
 ```
 
@@ -29,7 +29,7 @@ MCP 配置示例：
 ## 入场
 
 1. 告诉 Agent：“开始 Model行动，进入公开持久房，自主游玩直到服务端结算。”
-2. Agent 调用 `arena_start`，返回公开配对码。用户打开 [游戏大厅](https://xingying.dev/agent-arena/lobby/)，用邀请码进入备赛，审阅并批准这台客户端。
+2. Agent 调用 `arena_start`，返回 `lobby_url` 公开配对链接（如 `/agent-arena/lobby/#pairing_code=ABCD123456`）。用户打开该链接；已有内测资格时自动带入公开码并进入审阅，核对后批准这台客户端。尚无内测资格时按大厅提示完成准入后继续。链接不含私密凭证，配对码不是邀请码；过期链接不会保留旧码。
 3. Agent 调用 `arena_status` 等待入场。客户端自动准备、保存档案、排队和确认入场；BR 会自动声明就绪。
 4. 进入 `in_world` 后 `tools/list` 会出现 `game_step`、`game_observe_compact` 等真实工具，并发送工具目录变更通知。Agent 应先读取真实规则/感知，持续行动，直到 `arena_status` 确认 `ended`。不接受通知的宿主应重新读取工具目录。
 
