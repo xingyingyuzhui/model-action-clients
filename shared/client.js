@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const SAFE = Symbol('arena-client-error');
 const error = (code, status = null, retryable = false) => Object.assign(new Error(code), { code, status, retryable, [SAFE]: true });
@@ -35,7 +35,12 @@ const sameEntry = (a, b) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b
 function nativeConsentScope(value) {
   const access = value.native_access;
   if (token(access?.token) && identifier(access.grant?.id) && access.grant.state === 'active') return access.grant.id;
-  return token(value.native_legacy_ticket) ? 'legacy-native' : null;
+  if(token(value.native_legacy_ticket))return 'legacy-native';
+  if(!access&&value.control?.acked&&token(value.control.token)){
+    const digest=createHash('sha256').update(value.control.token).digest('hex');
+    if(value.native_verified_control===digest)return 'verified-lease:'+digest;
+  }
+  return null;
 }
 function confirmedEntry(value) {
   const entry = completeEntry(value.entry_preferences), scope = nativeConsentScope(value);
@@ -124,7 +129,7 @@ export class ArenaClient {
     return {schema_version:2,catalog_revision:data.catalog_revision,appearance:{character:data.appearance.character.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,cosmetic_only:true}))},
       loadouts:data.loadouts.map(p=>({id:p.id,name:p.name,enabled:p.enabled!==false,weapon:p.weapon,equipment:p.equipment,weight_kg:p.weight_kg,total_value:p.total_value})),mode_ids:data.mode_ids};
   }
-  async connectNative({ticket,label='Model行动 client',version='0.2.0'}={}){
+  async connectNative({ticket,label='Model行动 client',version='0.2.2'}={}){
     requireText(label,60);requireText(version,40);
     if(ticket!==undefined){
       if(typeof ticket!=='string')throw error('invalid_invite_input');
@@ -149,7 +154,13 @@ export class ArenaClient {
         try{
           const session=await this.request('/client/v2/session',{method:'GET',bearer:this.control(value)});
           if(!states.has(session.state))throw error('invalid_response');
-          return {state:'connected',grant:value.native_access?.grant??null,session:await this.restoreNativeProfile(value,session)};
+          const restored=await this.restoreNativeProfile(value,session);
+          // Old stdio clients may still have a valid browser-era lease without
+          // a persistent native grant. Bind preference consent only after the
+          // current server actually validates this exact lease.
+          value.native_verified_control=createHash('sha256').update(value.control.token).digest('hex');
+          await this.store.write(value);
+          return {state:'connected',grant:value.native_access?.grant??null,session:restored};
         }catch(cause){if(cause.status!==401)throw cause;this.clearConnection(value);await this.store.write(value);}
       }
       let pending=value.pending_native_connect;
@@ -280,6 +291,7 @@ export class ArenaClient {
 
   clearConnection(value) {
     value.control = null; value.pairing = null; value.attempt = null;
+    delete value.native_verified_control;
     value.pending_claim = null; value.pending_operations = {};
   }
   async resetConnection() {
@@ -401,7 +413,10 @@ export class ArenaClient {
       if(result.state==='ready'){
         value=await this.load();value.entry_preferences=body;
         const profile=value.profiles[result.public_agent_id];
-        if(profile){if(body.name!==undefined)profile.name=body.name;if(body.character_id!==undefined)profile.appearance={character:body.character_id};}
+        if(profile){
+          if(profile.acked&&!profile.unavailable)value.last_profile_id=result.public_agent_id;
+          if(body.name!==undefined)profile.name=body.name;if(body.character_id!==undefined)profile.appearance={character:body.character_id};
+        }
         const consent=value.entry_consent,prepared=completeEntry(body);
         if(consent&&profile?.acked&&!profile.unavailable&&consent.scope===nativeConsentScope(value)&&sameEntry(completeEntry(consent.entry),prepared)&&
           (!consent.public_agent_id||consent.public_agent_id===result.public_agent_id))consent.public_agent_id=result.public_agent_id;

@@ -11,7 +11,7 @@ Usage: model-action-mcp [--server-url URL] [--session NAME] [--state-dir DIRECTO
   --help        Show this help
   --version     Show version
 Environment: MODEL_ACTION_SERVER_URL, MODEL_ACTION_SESSION, MODEL_ACTION_STATE_DIR
-Credentials are obtained by browser pairing and are never CLI arguments.
+Invitations are provided in the host conversation; no browser pairing or CLI credential arguments.
 `;
 function parse(argv) {
   const options = { serverUrl: process.env.MODEL_ACTION_SERVER_URL, session: process.env.MODEL_ACTION_SESSION, stateDir: process.env.MODEL_ACTION_STATE_DIR };

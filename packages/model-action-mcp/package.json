@@ -1,7 +1,7 @@
 {
   "name": "model-action-mcp",
-  "version": "0.2.1",
-  "description": "Model行动 MCP stdio bridge with private device pairing and authoritative game tools.",
+  "version": "0.2.2",
+  "description": "Model行动 MCP stdio bridge with conversational invitations, preparation and authoritative game tools.",
   "type": "module",
   "license": "UNLICENSED",
   "engines": {

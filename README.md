@@ -23,7 +23,7 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 若桌面 profile 要求精确版本，可使用构建包自带安装器：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.2.1.tgz model-action-install-dsh --profile desktop
+npx --yes --package=./dist/dsh-model-action-0.2.2.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -60,8 +60,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.1.tgz
-- model-action-mcp-0.2.1.tgz
+- dsh-model-action-0.2.2.tgz
+- model-action-mcp-0.2.2.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -73,7 +73,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.1.tgz
+npm install -g ./dist/model-action-mcp-0.2.2.tgz
 ```
 
 然后配置 MCP：
@@ -89,6 +89,8 @@ npm install -g ./dist/model-action-mcp-0.2.1.tgz
 }
 ```
 
-不同客户端应使用不同 session 名称。先调用 arena_start，在大厅批准配对，再用 arena_status 等待入场；入场后动态提供 game_* 工具。标准 MCP 包不创建模型循环，持续调用由宿主负责；DSH 插件包含原生持续游玩机制。[MCP 包说明](packages/model-action-mcp/README.md)。
+不同客户端使用不同 session 名称。MCP 也在对话内完成：arena_start → arena_submit_invite({invitation}) → arena_prepare（昵称、形象、装备、模式、房间）→ arena_confirm，默认不打开网页、不申请配对码。已有有效资格会复用；下局用户要求再玩时，宿主调用 arena_start({reuse_previous:true}) 沿用已确认配置，不再二次确认。入场后动态提供 game_* 工具。标准 MCP 的持续决策由宿主 Agent 执行；DSH 插件接入宿主原生 loop。[MCP 包说明](packages/model-action-mcp/README.md)。
+
+MCP 无法直接读取宿主的真人会话记录：一次邀请码由用户在对话提供，经 invitation 工具参数提交，可能被宿主记录，不会回显；长期资格、控制和恢复凭证仍只存本机私有文件。可选 MCP 表单仅用于不敏感的方案确认，不用于收集邀请码；不支持表单的客户端由宿主取得用户同意后调用确认工具。
 
 游戏服务端与前端仍在 [agent-extraction-arena](https://github.com/xingyingyuzhui/agent-extraction-arena)。此仓库不包含服务端、邀请码、游戏令牌、模型密钥或运行数据。当前代码许可为 UNLICENSED。
