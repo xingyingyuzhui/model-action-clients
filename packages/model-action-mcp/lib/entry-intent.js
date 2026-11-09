@@ -17,7 +17,7 @@ export function entryIntent(value, { catalog, entry } = {}) {
   // Clause-local negatives do not confuse tactical instructions such as
   // "别太早撤离，再来一轮" with a request to stop playing.
   const clauses = intentText.split(/[，,。；;！!\n]/).map(v => v.trim()).filter(Boolean);
-  const stopped = humanStopIntent(intentText).stopped || clauses.some(clause => deferStart.test(clause));
+  const stopped = humanStopIntent(intentText, { inMatch: false }).stopped || clauses.some(clause => deferStart.test(clause));
   const quoted = /[“「『`]|"[^"]+"|'[^']+'/.test(text);
   const discussed = commentary.test(text) || quoted;
   let configurationTouched = change.test(intentText);
@@ -54,9 +54,22 @@ export function entryIntent(value, { catalog, entry } = {}) {
 
 // Only authenticated human messages may reach this policy. Tactical instructions
 // and discussion of a quoted stop request must not interrupt an active match.
-export function humanStopIntent(value) {
+//
+// An explicit request names the game ("停止游戏", "退出这局") or playing itself
+// ("不玩了") and takes effect from any clause. A bare one ("停", "别打了",
+// "等等", "stop") is ambiguous mid-match: "别打了，快撤" and "等等，前面有人"
+// are combat instructions. It counts only when the rest of the message is filler
+// or talk addressed to the assistant ("先停一下，告诉我现在状态"). Before a
+// match starts there is no combat to confuse, so pass { inMatch: false } to let
+// every stop clause count on its own.
+const FILLER = /^(?:好|好的|好了|好吧|行|行了|嗯|哦|算了|那就这样|就这样|谢谢|辛苦了|我(?:先)?(?:看看|看一下|想想|想一下)|让我(?:看看|想想)|ok|okay|thanks?|thank you)(?:吧|啊|呀|了|啦)?$/i;
+const TALK = /告诉我|说说|说一下|讲讲|讲一下|汇报|报告|解释|总结|复盘|为什么|为何|怎么|如何|什么|多少|吗$|呢$|状态|情况|结果|\b(?:why|how|what|tell me|explain|status|report|summary)\b/i;
+const OBJECT = /(?:游戏|比赛|对局|这局|本局|自动续行|续行|Model行动)/i;
+const ENGLISH_OBJECT = /\b(?:game|match|arena|model[ _-]*action)\b/i;
+export function humanStopIntent(value, { inMatch = true } = {}) {
   const result = { stopped: false, abandon: false };
-  const clauses = textOf(value).split(/[，,。；;！!？?\n]/).map(text => text.trim());
+  const clauses = textOf(value).split(/[，,。；;！!？?\n]/).map(text => text.trim()).filter(Boolean);
+  let bare = false, bareAbandon = false, other = false;
   for (const raw of clauses) {
     // Recognize a complete direct request. Negation, reported speech, conditions
     // and tactical actions cannot authorize lifecycle changes by containing a verb.
@@ -68,11 +81,17 @@ export function humanStopIntent(value) {
       .replace(/^(?:现在|马上|立刻|立即|直接|先)\s*/, '');
     const abandon = /^(?:先)?(?:退出|放弃|结束)(?:这局|本局|对局|比赛|游戏|Model行动)(?:吧|了|啦|啊|呀)?$/i.test(command) ||
       /^(?:quit|leave|abandon|exit|end)(?:\s+(?:the\s+)?(?:current\s+)?(?:game|match|arena|model[ _-]*action))?(?:\s+(?:now|please))?$/i.test(command);
-    const pause = /^(?:先)?(?:暂停|停下|停止|取消|停)(?:一下|一会儿|一会|会儿|会)?(?:游戏|比赛|对局|这局|本局|自动续行|续行|Model行动)?(?:一下)?(?:吧|了|啦|啊|呀)?$/i.test(command) ||
-      /^(?:我(?:现在)?)?(?:先)?(?:别|不|暂不|不再|不要|不想|不用)(?:再|继续)?(?:玩|打|开始|开局|开打|开战|启动|开启|入场|加入)(?:(?:这个|这款|这场|这局|本局)?(?:游戏|比赛|对局))?(?:了|啦)?(?:吧|啊|呀)?$/.test(command) ||
-      /^(?:stop|pause|cancel)(?:\s+(?:the\s+)?(?:game|match|arena|model[ _-]*action))?(?:\s+(?:now|please))?$/i.test(command) || /^(?:等等|等一下|稍等)$/.test(command);
-    result.stopped ||= abandon || pause;
-    result.abandon ||= abandon;
+    const verbStop = /^(?:先)?(?:暂停|停下|停止|取消|停)(?:一下|一会儿|一会|会儿|会)?(?:游戏|比赛|对局|这局|本局|自动续行|续行|Model行动)?(?:一下)?(?:吧|了|啦|啊|呀)?$/i.test(command);
+    const refuse = /^(?:我(?:现在)?)?(?:先)?(?:别|不|暂不|不再|不要|不想|不用)(?:再|继续)?(?:玩|打|开始|开局|开打|开战|启动|开启|入场|加入)(?:(?:这个|这款|这场|这局|本局)?(?:游戏|比赛|对局))?(?:了|啦)?(?:吧|啊|呀)?$/.test(command);
+    const english = /^(?:stop|pause|cancel)(?:\s+(?:the\s+)?(?:game|match|arena|model[ _-]*action))?(?:\s+(?:now|please))?$/i.test(command);
+    const wait = /^(?:等等|等一下|稍等)$/.test(command);
+    if (abandon || verbStop || refuse || english || wait) {
+      // "打" also means fighting; "玩", "开局" and an explicit object do not.
+      const explicit = OBJECT.test(command) || ENGLISH_OBJECT.test(command) || (refuse && !/(?:别|不|暂不|不再|不要|不想|不用)(?:再|继续)?打(?:了|啦)?(?:吧|啊|呀)?$/.test(command));
+      if (explicit || !inMatch) { result.stopped = true; result.abandon ||= abandon; }
+      else { bare = true; bareAbandon ||= abandon; }
+    } else if (!FILLER.test(raw) && !FILLER.test(command) && !TALK.test(raw)) other = true;
   }
+  if (bare && !other) { result.stopped = true; result.abandon ||= bareAbandon; }
   return result;
 }

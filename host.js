@@ -238,7 +238,8 @@ export function installArenaHost(ctx, config, dependencies) {
     if (input?.source?.kind !== 'user') return false;
     const text = typeof input.content === 'string' ? input.content : Array.isArray(input.content)
       ? input.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : '';
-    const intent = humanStopIntent(text);
+    // Bare "停"/"别打了" mid-match may be a combat instruction; before entry it is not.
+    const intent = humanStopIntent(text, { inMatch: state.runtime?.state?.().entry_state === 'in_world' });
     if (!intent.stopped) return false;
     state.humanStopPending = true;
     state.armed = false;
