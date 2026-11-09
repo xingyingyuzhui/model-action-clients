@@ -23,7 +23,7 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 桌面 profile 由 Electron 管理、CLI 拒绝操作时，使用构建包自带安装器。先完全退出 DSH，再执行以下命令（Windows 请通过 npx 运行）：
 
 ```sh
-npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.6/dsh-model-action-0.2.6.tgz model-action-install-dsh --profile desktop
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.7/dsh-model-action-0.2.7.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -60,8 +60,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.6.tgz
-- model-action-mcp-0.2.6.tgz
+- dsh-model-action-0.2.7.tgz
+- model-action-mcp-0.2.7.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -73,7 +73,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.6.tgz
+npm install -g ./dist/model-action-mcp-0.2.7.tgz
 ```
 
 然后配置 MCP：
@@ -126,3 +126,9 @@ node scripts/e2e-natural-entry.mjs --game-dir /absolute/path/to/agent-extraction
 DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 BOM JSON。Windows 安装使用真实目录，保留精确版本依赖，并由插件自身 bundle patch 加载一次。不要在 profile patch 再插入 model-action-native。Windows 分支尚未实机验证。
 
 正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，目前会拒绝访问并提示 store_locked，需要排障；关闭重复实例只解决活跃占用，不能自动清除残留锁。
+
+## 因果咨询与加载验收（0.2.7）
+
+“为什么停止游戏”“因为什么会退出游戏”“他为什么想退出这局”等因果咨询不会触发停止或弃局。单独分句里的明确停止请求仍然生效，例如“退出这局，告诉我为什么失败”。
+
+DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注册，并实际完成备战入场。dump-config 与普通 import host.js 仅覆盖配置和模块入口，DSH peer 模块在 apply() 时动态加载。Windows 真实目录安装应携带完整依赖树，包含 @deepseek-ai/dsh-tools、@deepseek-ai/dsh-mcp-client、@deepseek-ai/dsh-llm，不能只复制 yaml。

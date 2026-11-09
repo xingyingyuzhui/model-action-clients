@@ -671,7 +671,7 @@ test('existing game stop requires current authentic explicit abandonment and doe
   assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
   assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
   const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
-  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.6');
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.7');
   assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
   nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
 });
@@ -722,7 +722,7 @@ test('fresh authenticated stop disarms during publication and preserves user inp
 
 test('human stop ignores model sources and quoted tactics, then explicit exit abandons',async t=>{
   const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('human-stop-provenance');await beginGame(f,a);f.runtimes[0].enter();await flush();
-  for(const [kind,text] of [['plugin','退出这局'],['user','他说“停止游戏”'],['user','别太早撤离'],['user','如何停止游戏'],['user','怎么退出游戏'],['user','有没有办法退出游戏']]){
+  for(const [kind,text] of [['plugin','退出这局'],['user','他说“停止游戏”'],['user','别太早撤离'],['user','如何停止游戏'],['user','怎么退出游戏'],['user','有没有办法退出游戏'],['user','因为什么会退出游戏'],['user','他为什么想退出这局']]){
     await f.emit('session/event',a.session,{type:'user/message',data:{source:{kind},content:text}});await flush();assert.equal((await f.run('arena_status',{},a)).native_loop.armed,true);
   }
   await f.emit('session/event',a.session,{type:'user/message',data:{source:{kind:'user'},content:'退出这局'}});await flush();
