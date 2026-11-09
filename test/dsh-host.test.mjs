@@ -89,7 +89,7 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
       async whenIdle() {}, scopeState: state, scoped,
     };
     agent.ctx = { plugin(plugin) {
-      const inner = { tools: { register: register(scoped), restrict(filter) { assert.deepEqual(filter, { allow: [] }); state.restricted = true; },
+      const inner = { tools: { register: register(scoped), restrict(filter) { assert.deepEqual(filter, { allow: ['arena_start','arena_connect','arena_submit_invite','arena_prepare','arena_confirm','arena_status','arena_repair_pairing','arena_stop'] }); state.restricted = true; },
         guard(fn) { state.guards.push(fn); } } };
       let active = true;
       const loaded = Promise.resolve().then(() => plugin.apply(inner));
@@ -356,7 +356,7 @@ test('arena_stop during terminal closing cannot restore external tools before tu
   assert.equal(a.scopeState.restricted, true);
   const stopped = await f.run('arena_stop', {}, a);
   assert.equal(stopped.character_state, 'ended');
-  assert.equal(a.scopeState.restricted, true); assert.ok(a.scoped.has('arena_status'));
+  assert.equal(a.scopeState.restricted, true); assert.ok(f.globals.has('arena_status')); assert.equal(a.scoped.has('arena_status'),false);
   assert.ok(a.scopeState.guards[0]({ name: 'read_file' }));
   assert.ok(a.scopeState.guards[0]({ name: 'mcp__model_action__observe' }));
   await f.emit('session/event', a.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } });

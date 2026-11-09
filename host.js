@@ -352,8 +352,9 @@ export function installArenaHost(ctx, config, dependencies) {
     if (state.scope) return;
     const fiber = state.agent.ctx.plugin({ name: 'model-action-session-tools', inject: ['tools'], apply(inner) {
       state.scopeCtx = inner;
-      for (const definition of definitions) inner.tools.register(definition);
-      inner.tools.restrict({ allow: [] });
+      // Controls keep their global identity while a game scope is removed.
+      // A new human request can safely await teardown without a stale tool.
+      inner.tools.restrict({ allow: ARENA_NAMES });
       inner.tools.guard?.(exec => state.terminalClosing
         ? ['arena_status', 'arena_stop'].includes(exec.name) ? undefined : 'Game ended; report the confirmed result without further actions'
         : ARENA_NAMES.includes(exec.name) || state.gameNames.has(exec.name) ? undefined : 'Model行动 session permits only game tools');

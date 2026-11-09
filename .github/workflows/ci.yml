@@ -46,4 +46,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Prepare official DSH host
+        timeout-minutes: 10
+        run: npm install --prefix "${{ runner.temp }}/model-action-official-host" --ignore-scripts --no-audit --no-fund --workspaces=false --global=false --loglevel=info @deepseek-ai/dsh@0.2.2-rc.1
       - run: npm run test:install
+        env:
+          MODEL_ACTION_DSH_CLI: ${{ runner.temp }}/model-action-official-host/node_modules/@deepseek-ai/dsh/lib/bin.js

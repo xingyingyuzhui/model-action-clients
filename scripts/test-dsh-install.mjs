@@ -153,25 +153,18 @@ try {
 
   // Install the official CLI separately. It supplies the genuine host runtime,
   // while the plugin and all its dependencies stay in the installed profile.
-  const tools = path.join(home, "official-host");
-  fs.mkdirSync(tools);
-  fs.writeFileSync(
-    path.join(tools, "package.json"),
-    JSON.stringify({
-      private: true,
-      dependencies: { "@deepseek-ai/dsh": "0.2.2-rc.1" },
-    }),
-  );
-  console.log(JSON.stringify({stage: "preparing official DSH CLI fixture"}));
-  runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], tools, 0, 600000);
-  const cli = path.join(
-    tools,
-    "node_modules",
-    "@deepseek-ai",
-    "dsh",
-    "lib",
-    "bin.js",
-  );
+  let cli = process.env.MODEL_ACTION_DSH_CLI;
+  if (!cli) {
+    const tools = path.join(home, "official-host");
+    fs.mkdirSync(tools);
+    fs.writeFileSync(path.join(tools, "package.json"), JSON.stringify({
+      private: true, dependencies: { "@deepseek-ai/dsh": "0.2.2-rc.1" },
+    }));
+    console.log(JSON.stringify({ stage: "preparing official DSH CLI fixture" }));
+    runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", tools, "--workspaces=false", "--global=false"], tools, 0, 600000);
+    cli = path.join(tools, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(cli), "..", "package.json"))).version, "0.2.2-rc.1");
   const progress = path.join(home, "progress.json"),
     projection = path.join(home, "session.json");
   let state = "preparing",
@@ -359,7 +352,7 @@ try {
       let action,
         args = {},
         message = "Fixture complete";
-      if (count === 0 && [1, 4].includes(phase)) action = "arena_start";
+      if (count === 0 && [1, 4, 5].includes(phase)) action = "arena_start";
       else if (count === 0 && phase === 2) {
         action = "arena_prepare";
         args = {
@@ -373,14 +366,14 @@ try {
         action = "arena_confirm";
         args = { confirmation_id: confirmation };
       } else if (
-        [3, 4].includes(phase) &&
+        [3, 4, 5].includes(phase) &&
         names.includes("mcp__model_action__step") &&
         !steps.has(phase)
       ) {
         steps.add(phase);
         action = "mcp__model_action__step";
       } else if (
-        phase === 3 &&
+        [3, 5].includes(phase) &&
         state === "in_world" &&
         names.includes("mcp__model_action__abandon")
       )
@@ -470,8 +463,8 @@ async function run(ctx) {
     agentOptions: { ...ctx.agentDefaultModel.currentSelection() },
   });
   active = agent;
-  const humans = ['开启 Model行动', '昵称安装回归，Qwen，步枪，持久房', '确认，开始吧', '再来一局'];
-  for (let phase = 1; phase <= 4; phase++) {
+  const humans = ['开启 Model行动', '昵称安装回归，Qwen，步枪，持久房', '确认，开始吧', '再来一局', '再来一局'];
+  for (let phase = 1; phase <= 5; phase++) {
     await agent.whenIdle();
     fs.writeFileSync(${JSON.stringify(progress)}, JSON.stringify({ phase }));
     agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: humans[phase - 1] }] }));
@@ -488,7 +481,7 @@ async function run(ctx) {
       if (!injected) throw new Error('stop_fixture_timeout');
     }
     await agent.whenIdle();
-    if (phase === 3) {
+    if ([3, 5].includes(phase)) {
       for (let attempt = 0; attempt < 15; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 100));
         await agent.whenIdle();
@@ -554,9 +547,9 @@ async function run(ctx) {
       }),
     );
   assert.equal(exit, 0, diagnostics);
-  assert.equal(sequence, 2);
-  assert.equal(gameSteps, 2);
-  assert.equal(abandoned, 2);
+  assert.equal(sequence, 3);
+  assert.equal(gameSteps, 3);
+  assert.equal(abandoned, 3);
   assert.equal(state, "ended");
   const log = JSON.parse(fs.readFileSync(projection));
   const stop = log.findIndex(
@@ -569,12 +562,14 @@ async function run(ctx) {
       ),
   );
   assert.ok(stop >= 0);
+  const restart = log.findIndex((event, index) => index > stop && event.type === "user/message" && event.data.source?.kind === "user" && JSON.stringify(event.data.content).includes("再来一局"));
+  assert.ok(restart > stop);
   assert.equal(
-    log.slice(stop + 1).some((event) => event.type === "tool/call"),
+    log.slice(stop + 1, restart).some((event) => event.type === "tool/call"),
     false,
   );
   check(
-    "official DSH loads the installed bundle, enters, plays, repeats and processes a human exit",
+    "official DSH loads the installed bundle, enters, plays, repeats, exits on human request and restarts",
   );
   console.log(
     JSON.stringify({

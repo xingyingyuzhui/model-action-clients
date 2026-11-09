@@ -61,7 +61,7 @@ function npmCommand() {
 }
 
 function runNpm(command, arguments_, cwd, timeout) {
-  const result = spawnSync(command[0], [...command.slice(1), ...arguments_], {
+  const result = spawnSync(command[0], [...command.slice(1), ...arguments_, "--prefix", cwd, "--workspaces=false", "--global=false"], {
     cwd,
     encoding: "utf8",
     timeout,
