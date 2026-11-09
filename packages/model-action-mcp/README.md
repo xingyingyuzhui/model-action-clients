@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.6.tgz
+npm install -g ./model-action-mcp-0.2.7.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.6.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.6/model-action-mcp-0.2.6.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.7/model-action-mcp-0.2.7.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -97,3 +97,9 @@ DSH 在收到真人用户的“别玩了”“先不玩”“停一下”等消�
 DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 BOM JSON。Windows 安装使用真实目录，保留精确版本依赖，并由插件自身 bundle patch 加载一次。不要在 profile patch 再插入 model-action-native。Windows 分支尚未实机验证。
 
 正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，目前会拒绝访问并提示 store_locked，需要排障；关闭重复实例只解决活跃占用，不能自动清除残留锁。
+
+## 因果咨询与加载验收（0.2.7）
+
+“为什么停止游戏”“因为什么会退出游戏”“他为什么想退出这局”等因果咨询不会触发停止或弃局。单独分句里的明确停止请求仍然生效，例如“退出这局，告诉我为什么失败”。
+
+DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注册，并实际完成备战入场。dump-config 与普通 import host.js 仅覆盖配置和模块入口，DSH peer 模块在 apply() 时动态加载。Windows 真实目录安装应携带完整依赖树，包含 @deepseek-ai/dsh-tools、@deepseek-ai/dsh-mcp-client、@deepseek-ai/dsh-llm，不能只复制 yaml。

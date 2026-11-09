@@ -51,3 +51,14 @@ test('information questions do not authorize stops and natural refusal suffixes 
   assert.deepEqual(humanStopIntent('怎么停止游戏？退出这局'),{stopped:true,abandon:true});
   assert.deepEqual(humanStopIntent('退出这局，告诉我怎么开始下一局'),{stopped:true,abandon:true});
 });
+
+test('causal questions never authorize stopping or abandoning a match',async()=>{
+  const {humanStopIntent}=await import('../shared/entry-intent.js');
+  for(const text of ['因为什么会退出游戏','他为什么想退出这局','为什么停止游戏','为何退出游戏','她为何要放弃本局','Why stop the game?','He asked why we should quit the match'])
+    assert.deepEqual(humanStopIntent(text),{stopped:false,abandon:false},text);
+  assert.deepEqual(humanStopIntent('退出这局，告诉我为什么失败'),{stopped:true,abandon:true});
+  assert.deepEqual(humanStopIntent('为什么停止游戏？先停一下'),{stopped:true,abandon:false});
+  for(const text of ['无论如何先停一下','不管为什么先停一下','不管因为什么先停一下','我不管是为什么先停一下'])
+    assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:false},text);
+  assert.deepEqual(humanStopIntent('无论为何先退出这局'),{stopped:true,abandon:true});
+});
