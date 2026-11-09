@@ -11,13 +11,13 @@ Desktop 使用构建包自带的安装器，需要 Node.js 22+，宿主合同为
 完全退出 DSH 后，在系统终端执行。macOS / Linux 使用以下命令。
 
 ```sh
-npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/dsh-model-action-0.2.9.tgz model-action-install-dsh --profile desktop
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/dsh-model-action-0.2.10.tgz model-action-install-dsh --profile desktop
 ```
 
 Windows PowerShell 使用 npm 自带的命令入口。
 
 ```powershell
-npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/dsh-model-action-0.2.9.tgz model-action-install-dsh --profile desktop
+npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/dsh-model-action-0.2.10.tgz model-action-install-dsh --profile desktop
 ```
 
 安装器会保留模型配置，校验文件与完整依赖、实际加载插件并验证 8 个工具注册及卸载。输出 `verified:true` 后，完全重启 DSH，在新会话里说“开启 Model行动”。`--dry-run` 只检查计划，已有旧插件时追加 `--replace-legacy` 完成备份和迁移。
@@ -68,8 +68,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.9.tgz
-- model-action-mcp-0.2.9.tgz
+- dsh-model-action-0.2.10.tgz
+- model-action-mcp-0.2.10.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -81,7 +81,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.9.tgz
+npm install -g ./dist/model-action-mcp-0.2.10.tgz
 ```
 
 然后配置 MCP：
@@ -162,7 +162,7 @@ DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注�
 
 停止意图按完整的直接请求识别。“我没有让你退出这局”“如果快死了就退出这局”“stop shooting”等不会触发生命周期改变。明确的“请立即停止游戏”“现在退出这局”继续生效。锁创建失败清理本次锁，释放失败会报错并允许重试；宿主清理失败也会尝试关闭存储。备战连接中的停止会取消底层请求。
 
-## 局内停止与战斗指令
+## 局内停止与战斗指令（0.2.10）
 
 对局进行中，“停”“别打了”“等等”“stop”这类没说明对象的词，也可能是战斗指令。规则如下：
 

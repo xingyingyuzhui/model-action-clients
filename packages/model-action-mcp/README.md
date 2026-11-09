@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.9.tgz
+npm install -g ./model-action-mcp-0.2.10.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.9.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/model-action-mcp-0.2.9.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/model-action-mcp-0.2.10.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
