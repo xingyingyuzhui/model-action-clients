@@ -23,7 +23,7 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 若桌面 profile 要求精确版本，可使用构建包自带安装器：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.2.4.tgz model-action-install-dsh --profile desktop
+npx --yes --package=./dist/dsh-model-action-0.2.5.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -60,8 +60,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.4.tgz
-- model-action-mcp-0.2.4.tgz
+- dsh-model-action-0.2.5.tgz
+- model-action-mcp-0.2.5.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -73,7 +73,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.4.tgz
+npm install -g ./dist/model-action-mcp-0.2.5.tgz
 ```
 
 然后配置 MCP：
@@ -104,3 +104,17 @@ MCP 无法直接读取宿主的真人会话记录：一次邀请码由用户在�
 ## 提前返回提示（0.2.4）
 
 服务器声明 `step.return_after_ms` 能力后，客户端会提示 Agent 使用 `hold_ms:1000` 配合 `return_after_ms:300~500`，在按键仍生效时开始下一轮决策。此提示同时适用于原生 DSH 插件和标准 MCP；旧服务器仍可正常使用。
+
+## 停止与凭证保护（0.2.5）
+
+DSH 在收到真人用户的“别玩了”“先不玩”“停一下”等消息后，立即解除自动续行、取消在途调用并清理本插件排队的续行消息，保留用户输入。“退出这局”“放弃本局”等明确退局请求还会尝试服务端弃局。普通暂停只停止本地控制，角色状态通过 `arena_status` 查询。引用、战术指令和工具返回的文本不会作为真人停止授权。
+
+游戏工具输出、状态和终局消息统一过滤邀请码与私有凭证，包括文本块里的 JSON 字段。来自服务端的工具描述与观察附有数据来源提示。普通 profile 和源码检查、单纯路径显示可以正常使用，通用工具读取游戏私有身份目录仍会被拦截。
+
+文件锁冲突会提示关闭重复实例，禁止通过删除身份文件排障。路径与输出守卫属于纵深保护，需配合宿主权限控制。Windows 文件 ACL 尚未在 Windows 环境验证。标准 MCP 宿主需将用户停止意图交给 `arena_stop`，原生 DSH 的消息监听由插件直接处理。
+
+可在安装官方 DSH 的 macOS 上运行中途停止回归，模型端使用本地模拟响应，游戏端使用隔离的真实房间 worker。
+
+```bash
+node scripts/e2e-natural-entry.mjs --game-dir /absolute/path/to/agent-extraction-arena --stop
+```

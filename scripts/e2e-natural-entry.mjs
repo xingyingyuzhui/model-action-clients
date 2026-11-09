@@ -16,7 +16,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const args=process.argv.slice(2);const publicMode=args[2]==='--open';if(![2,3].includes(args.length)||args[0]!=='--game-dir'||args.length===3&&!publicMode)throw new Error('usage: --game-dir /absolute/agent-extraction-arena');
+const args=process.argv.slice(2);const stopMode=args[2]==='--stop',publicMode=stopMode||args[2]==='--open';if(![2,3].includes(args.length)||args[0]!=='--game-dir'||args.length===3&&!publicMode)throw new Error('usage: --game-dir /absolute/agent-extraction-arena [--open|--stop]');
 const GAME=path.resolve(args[1]);
 const [{RoomManager},{ArenaLobby},{ProfileStore},{RankingStore},{BetaAccessStore},{createArenaServer},{listen}]=await Promise.all(['rooms/manager.js','arena/lobby.js','profiles/store.js','rankings/store.js','beta/store.js','arena/http.js','server.js'].map(name=>import(pathToFileURL(path.join(GAME,'src',name)))));
 const CLIENT=ROOT,HOST=process.env.MODEL_ACTION_DSH_MODULES??'/Applications/DeepSeek Harness.app/Contents/Resources/app/dsh/node_modules';
@@ -40,9 +40,18 @@ export function apply(ctx){
  (async()=>{
   const {agent}=await ctx.agents.create({sessionId:'session-conversational-fixture',meta:{cwd:process.cwd()},agentOptions:{...ctx.agentDefaultModel.currentSelection()}});
   const humans=JSON.parse(fs.readFileSync(process.env.MODEL_E2E_INPUTS,'utf8'));
-  for(let index=0;index<humans.length;index++){
+  const stopMode=process.env.MODEL_E2E_STOP==='1';
+  for(let index=0;index<(stopMode?4:humans.length);index++){
    await agent.whenIdle();fs.writeFileSync(process.env.MODEL_E2E_PROGRESS,JSON.stringify({stage:index+1}),{mode:0o600});
    agent.followup(createUserMessage({content:[{type:'text',text:humans[index]}],source:{kind:'user'}}));
+   if(stopMode&&index===3){
+    for(let n=0;n<200;n++){
+     await new Promise(r=>setTimeout(r,50));
+     if(JSON.parse(fs.readFileSync(process.env.MODEL_E2E_PROGRESS)).readyToStop){
+      agent.inject(createUserMessage({content:[{type:'text',text:'退出这局'}],source:{kind:'user'}}));break;
+     }
+    }
+   }
    await agent.whenIdle();
    if(index===3||index===5){for(let n=0;n<20;n++){await new Promise(r=>setTimeout(r,150));await agent.whenIdle();}}
    await ctx.sessions.flush(agent.session);
@@ -80,11 +89,15 @@ try{
    else if(stage===4&&count===0){if(!confirmationId)throw new Error('missing_confirmation_id');action='arena_confirm';parameters={confirmation_id:confirmationId};}
    else if([4,6].includes(stage)&&!finals.has(stage)){finals.add(stage);earlyFinal=true;message='沿用核对过的配置，继续游戏至终局。';}
    else if([4,6].includes(stage)&&!steps.has(stage)&&names.includes('mcp__model_action__step')){steps.add(stage);step=true;action='mcp__model_action__step';parameters={input:{right:true,hold_ms:100},client_cmd_id:'natural-step-'+stage};}
+   else if(stopMode&&stage===4&&steps.has(stage)){fs.writeFileSync(progress,JSON.stringify({stage,readyToStop:true}));}
    else if([4,6].includes(stage)&&!abandons.has(stage)&&names.includes('mcp__model_action__abandon')){abandons.add(stage);abandon=true;action='mcp__model_action__abandon';}
    else message='等待服务端确认本局结果。';
    calls.push({call:modelCalls,stage,tools:names,action:action??'final',...(action==='arena_submit_invite'?{argument_keys:Object.keys(parameters)}:{}),invite_in_model_request:!!ticket&&raw.includes(ticket),invite_in_tool_history:history.some(text=>!!ticket&&text.includes(ticket)),private_credentials_in_tool_history:history.some(text=>/model_beta_(?:invite_)?[A-Za-z0-9_-]{43}|aea_profile_[A-Za-z0-9_-]{32,}|[\"'](?:access_token|control_token|game_token|recovery_secret|device_secret)[\"']\s*:\s*[\"'][A-Za-z0-9_-]{16,}/.test(text.replace(/\\\"/g,'\"')))});
    const delta=action?{role:'assistant',content:null,tool_calls:[{index:0,id:'fixture-'+modelCalls,type:'function',function:{name:action,arguments:JSON.stringify(parameters)}}]}:{role:'assistant',content:message};
    const chunk=(d,f)=>'data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',created:0,model:request.model,choices:[{index:0,delta:d,finish_reason:f}]})+'\n\n';
+   if(stopMode&&stage===4&&steps.has(stage)&&!action){
+    setTimeout(()=>{res.writeHead(200,{'content-type':'text/event-stream'});res.end(chunk({role:'assistant',content:'延迟响应'},null)+chunk({},'stop')+'data: [DONE]\n\n');},1000);return;
+   }
    res.writeHead(200,{'content-type':'text/event-stream'});res.end(chunk(delta,null)+chunk({},action?'tool_calls':'stop')+'data: [DONE]\n\n');
   }catch(e){diagnostics+='fake_model:'+String(e.code??e.message)+'\n';res.writeHead(500);res.end('{}');}
  });});await new Promise(r=>llm.listen(0,'127.0.0.1',r));
@@ -96,13 +109,23 @@ try{
  const humanDir=path.join(modules,'model-action-human-fixture');fs.mkdirSync(humanDir);fs.writeFileSync(path.join(humanDir,'package.json'),JSON.stringify({name:'model-action-human-fixture',type:'module',main:'index.js'}));fs.writeFileSync(path.join(humanDir,'index.js'),driver);
  fs.writeFileSync(path.join(profile,'package.json'),JSON.stringify({name:'model-action-conversation-fixture',private:true,dependencies:{'dsh-model-action':JSON.parse(fs.readFileSync(path.join(CLIENT,'package.json'))).version,'model-action-human-fixture':'0.0.0'},dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-headless','dsh-model-action']}}}));
  fs.writeFileSync(path.join(profile,'cordis.patch.yml'),`- id: headless-runner\n  disabled: true\n- id: permission\n  config:\n    presets:\n      arena-test:\n        sandbox: workspace-write\n        approval: never\n    defaultPreset: arena-test\n- id: model-action-native\n  config:\n    serverUrl: ${base}\n    maxSeconds: 60\n    maxToolCalls: 20\n    maxContinuations: 10\n    connectSeconds: 30\n- id: llm-pi-ai\n  config:\n    providers:\n      fake:\n        displayName: Explicit loopback fixture\n        api: openai-completions\n        baseURL: http://127.0.0.1:${llm.address().port}/v1\n        apiKeyEnv: MODEL_E2E_FAKE_KEY\n        models:\n          - id: conversation-fixture\n            name: Explicit loopback fixture\n            contextWindow: 200000\n            maxTokens: 1000\n            input: [text]\n- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: fake\n    model: conversation-fixture\n- insert:\n    - id: explicit-human-fixture\n      name: model-action-human-fixture\n`);
- const env={...process.env,DSH_HOME:home,DSH_TELEMETRY_MODE:'DISABLED',MODEL_E2E_FAKE_KEY:'explicit-local-fixture',MODEL_E2E_INPUTS:inputFile,MODEL_E2E_PROGRESS:progress,MODEL_E2E_SESSION:path.join(OUT,'session.private.json')};
+ const env={...process.env,DSH_HOME:home,DSH_TELEMETRY_MODE:'DISABLED',MODEL_E2E_FAKE_KEY:'explicit-local-fixture',MODEL_E2E_STOP:stopMode?'1':'0',MODEL_E2E_INPUTS:inputFile,MODEL_E2E_PROGRESS:progress,MODEL_E2E_SESSION:path.join(OUT,'session.private.json')};
  for(const key of Object.keys(env))if(/(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|MODEL_ACTION|AEA_)/.test(key))delete env[key];
  child=spawn(process.execPath,[CLI,'--profile','conversation-fixture','--approval-policy','never','explicit-human-fixture-driver'],{cwd:workspace,env});
  child.stdout.on('data',v=>output+=v);child.stderr.on('data',v=>diagnostics+=v);
  const timeout=setTimeout(()=>child.kill('SIGTERM'),60000);exit=await new Promise(r=>child.on('close',r));clearTimeout(timeout);
  const session=[...lobby.byId.values()][0];if(session)await lobby.exclusive(session,()=>lobby.refresh(session));
  for(let n=0;n<20&&manager.room('public-1').players_active;n++)await wait(100);
+ if(stopMode){
+  const log=JSON.parse(fs.readFileSync(path.join(OUT,'session.private.json')));
+  const stopIndex=log.findIndex(e=>e.type==='agent/inbox/spliced'&&e.data.inserted?.some(m=>m.source?.kind==='user'&&JSON.stringify(m.content).includes('退出这局')));
+  check('official DSH processes four rounds and a mid-game human exit',exit===0&&output.includes('"round":4'));
+  check('game started and a real step was executed',steps.has(4));
+  check('human exit frees the worker seat without a model abandon call',session?.state==='ended'&&session?.result?.outcome==='abandoned'&&manager.room('public-1').players_active===0&&!calls.some(c=>c.action==='mcp__model_action__abandon'));
+  check('human stop remains in the durable inbox after cancellation',stopIndex>=0&&!log.slice(stopIndex+1).some(e=>e.type==='agent/inbox/spliced'&&e.data.removedCount>0));
+  check('no continuation or gameplay tools after human stop',stopIndex>=0&&!log.slice(stopIndex+1).some(e=>e.type==='tool/call'||e.type==='user/message'&&e.data.source?.purpose==='arena-native-loop'));
+  check('no reentrant publication error',!diagnostics.includes('reentrant')&&!diagnostics.includes('append during'));
+ }else{
  check('official DSH 0.2.2-rc.1 completes six persistent human rounds',exit===0&&output.includes('"round":6'));
  check('invitation requested before this turn ends',calls.some(c=>c.stage===1&&c.action==='arena_start')&&calls.some(c=>c.stage===1&&c.action==='final'));
  check(publicMode?'open native DSH never requests an invitation submission':'human invitation submitted with no tool arguments',publicMode?!calls.some(c=>c.action==='arena_submit_invite'):calls.some(c=>c.stage===2&&c.action==='arena_submit_invite'&&c.argument_keys.length===0));
@@ -112,6 +135,7 @@ try{
  check('repeat skips preparation summary and a second confirmation',calls.some(c=>c.stage===6&&c.action==='arena_start')&&!calls.some(c=>c.stage===6&&['arena_prepare','arena_confirm'].includes(c.action)));
  check('intervening question or refusal never queues a game',!httpRoutes.some(r=>r.stage===5&&['/client/v2/prepare','/client/v2/queue','/client/v2/offer/accept'].includes(r.path)));
  check('authoritative real-worker terminal frees the player seat',session?.state==='ended'&&session?.result?.outcome==='abandoned'&&manager.room('public-1').players_active===0);
+ }
  check('four real rooms remain healthy',manager.rooms().length===4&&manager.rooms().every(r=>r.state!=='unavailable'));
  check('browser session creation and approval endpoints are never called',!httpRoutes.some(r=>/^\/lobby\/v2\/(?:session|pairing)/.test(r.path))&&httpRoutes.some(r=>r.path==='/client/v2/access/connect'));
  check('private credentials are absent from tool history and invitation submission has no arguments',calls.every(c=>!c.invite_in_tool_history&&!c.private_credentials_in_tool_history)&&calls.filter(c=>c.action==='arena_submit_invite').every(c=>c.argument_keys.length===0));

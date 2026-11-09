@@ -73,3 +73,27 @@ test('native confirmation guidance accepts natural consent without a next-messag
   assert.ok(v.instructions[0].includes(summary));assert.ok(v.instructions[1].includes('自然语言'));assert.ok(v.instructions[1].includes('不要求固定措辞'));assert.ok(v.instructions[1].includes('真人用户'));assert.ok(v.instructions[1].includes('模型自己不能确认'));assert.equal(v.browser_required,false);
   assert.ok(onboardingView({onboarding_mode:'conversation',phase:'ended'}).instructions[0].includes('不自动开始下一局'));
 });
+
+test('private-root protection allows path displays and ordinary profile or plugin inspection',()=>{
+  for(const command of ['echo ~/.dsh/plugins','printf "%s" ~/.dsh/plugins','cat ~/.dsh/profiles/desktop/package.json','rg version ~/.dsh/plugins/another-plugin/package.json','cat ~/.dsh/plugins/dsh-model-action-docs/README.md'])
+    assert.equal(privateStateAccess({name:'bash',arguments:{command}},{home:'/Users/qin/.dsh'}),undefined,command);
+  for(const command of ['echo $(cat ~/.dsh/plugins/dsh-model-action/a/b.json)','echo ok; cat ~/.dsh/plugins/dsh-aea/a/b.json','printf x > ~/.dsh/plugins/dsh-model-action/a/b.json','cat ~/.dsh/plugins/*/*/*.json','cat ~/.model-action/mcp-docs/README.md ~/.model-action/mcp/a.json','cat ~/.dsh/plugins/other/README.md ~/.dsh/plugins/*/*/*.json'])
+    assert.ok(privateStateAccess({name:'bash',arguments:{command}},{home:'/Users/qin/.dsh'}),command);
+});
+
+test('public value sanitizer protects non-tool messages and preserves public admission metadata',async()=>{
+  const {sanitizePublicValue,gameToolOutput,gameToolDescription}=await import('../shared/credential-guard.js');
+  const synthetic='model_beta_invite_'+'A'.repeat(43);
+  const result=sanitizePublicValue({ticket:synthetic,invite_required:false,invite_id:'invite_public',outcome:'won',detail:'echo '+synthetic,nested:{access_token:'private-proof',value:2}});
+  assert.equal(result.invite_required,false);assert.equal(result.invite_id,'invite_public');assert.equal(result.outcome,'won');assert.equal(result.nested.value,2);
+  assert.equal(containsPrivateCredentials(result),false);assert.ok(!JSON.stringify(result).includes('private-proof'));
+  const output=gameToolOutput({content:[{type:'text',text:'{"ok":true,"tick":5}'}]});
+  assert.deepEqual(JSON.parse(output.content[0].text),{ok:true,tick:5});assert.match(output.content.at(-1).text,/用户的停止请求/);assert.match(gameToolDescription('step'),/step/);
+});
+
+test('serialized tool data removes opaque credentials and file tools cannot spoof harmless commands',async()=>{
+  const {gameToolOutput}=await import('../shared/credential-guard.js');
+  const result=gameToolOutput({content:[{type:'text',text:JSON.stringify({ok:true,ticket:'opaque-invitation',nested:{proof:'private-proof'}})}]});
+  assert.deepEqual(JSON.parse(result.content[0].text),{ok:true,nested:{}});
+  assert.ok(privateStateAccess({name:'read_file',arguments:{path:'~/.dsh/plugins/dsh-model-action/a.json',command:'echo harmless'}}));
+});

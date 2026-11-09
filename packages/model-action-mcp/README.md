@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.4.tgz
+npm install -g ./model-action-mcp-0.2.5.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.4.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.4/model-action-mcp-0.2.4.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.5/model-action-mcp-0.2.5.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -81,3 +81,11 @@ CLI支持 `--server-url`、`--session`、`--state-dir`，对应 `MODEL_ACTION_SE
 ## 提前返回提示（0.2.4）
 
 服务器声明 `step.return_after_ms` 能力后，客户端会提示 Agent 使用 `hold_ms:1000` 配合 `return_after_ms:300~500`，在按键仍生效时开始下一轮决策。此提示同时适用于原生 DSH 插件和标准 MCP；旧服务器仍可正常使用。
+
+## 停止与凭证保护（0.2.5）
+
+DSH 在收到真人用户的“别玩了”“先不玩”“停一下”等消息后，立即解除自动续行、取消在途调用并清理本插件排队的续行消息，保留用户输入。“退出这局”“放弃本局”等明确退局请求还会尝试服务端弃局。普通暂停只停止本地控制，角色状态通过 `arena_status` 查询。引用、战术指令和工具返回的文本不会作为真人停止授权。
+
+游戏工具输出、状态和终局消息统一过滤邀请码与私有凭证，包括文本块里的 JSON 字段。来自服务端的工具描述与观察附有数据来源提示。普通 profile 和源码检查、单纯路径显示可以正常使用，通用工具读取游戏私有身份目录仍会被拦截。
+
+文件锁冲突会提示关闭重复实例，禁止通过删除身份文件排障。路径与输出守卫属于纵深保护，需配合宿主权限控制。Windows 文件 ACL 尚未在 Windows 环境验证。标准 MCP 宿主需将用户停止意图交给 `arena_stop`，原生 DSH 的消息监听由插件直接处理。

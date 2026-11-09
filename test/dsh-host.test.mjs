@@ -671,7 +671,7 @@ test('existing game stop requires current authentic explicit abandonment and doe
   assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
   assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
   const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
-  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.4');
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.5');
   assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
   nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
 });
@@ -709,4 +709,28 @@ test('continuation message suggests early step return only when the server step 
   assert.ok(a.injections[0].content[0].text.includes('EARLY-RETURN-TIP'));
   assert.ok(!b.injections[0].content[0].text.includes('return_after_ms'));
   assert.ok(b.injections[0].content[0].text.includes('输出总结不等于本局结束'));
+});
+
+test('fresh authenticated stop disarms during publication and preserves user input',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('human-stop-live');await beginGame(f,a);f.runtimes[0].enter();await flush();
+  a.inbox.remove=id=>{for(const list of [a.inbox.nextStep,a.inbox.nextTurn]){const i=list.findIndex(m=>m.id===id);if(i>=0){list.splice(i,1);return true;}}return false;};
+  const human={id:'human-stop',source:{kind:'user'},content:[{type:'text',text:'别玩了'}]};a.inbox.nextStep.push(human);
+  const before=a.injections.length;await f.emit('session/event',a.session,{type:'agent/inbox/spliced',seq:100,data:{inserted:[human]}});await flush();
+  assert.equal((await f.run('arena_status',{},a)).native_loop.armed,false);assert.equal(f.runtimes[0].stops[0].options.abandon,false);
+  assert.deepEqual(a.inbox.nextStep,[human]);await f.emit('agent/turn-stopping',{agent:a,signal:a.controller.signal});assert.equal(a.injections.length,before);
+});
+
+test('human stop ignores model sources and quoted tactics, then explicit exit abandons',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('human-stop-provenance');await beginGame(f,a);f.runtimes[0].enter();await flush();
+  for(const [kind,text] of [['plugin','退出这局'],['user','他说“停止游戏”'],['user','别太早撤离']]){
+    await f.emit('session/event',a.session,{type:'user/message',data:{source:{kind},content:text}});await flush();assert.equal((await f.run('arena_status',{},a)).native_loop.armed,true);
+  }
+  await f.emit('session/event',a.session,{type:'user/message',data:{source:{kind:'user'},content:'退出这局'}});await flush();
+  assert.equal((await f.run('arena_status',{},a)).native_loop.armed,false);assert.equal(f.runtimes[0].stops[0].options.abandon,true);
+});
+
+test('terminal injection sanitizes credential values outside the tool-output hook',async t=>{
+  const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('terminal-sanitized');await beginGame(f,a);f.runtimes[0].enter();await flush();
+  const synthetic='model_beta_invite_'+'A'.repeat(43);await f.runtimes[0].terminal({outcome:'won',ticket:synthetic,note:synthetic});
+  const notice=a.injections.find(m=>m.source?.purpose==='arena-terminal');assert.ok(notice);assert.ok(!JSON.stringify(notice).includes(synthetic));assert.ok(JSON.stringify(notice).includes('won'));
 });
