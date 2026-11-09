@@ -77,3 +77,19 @@ test('repeat entry uses the same lifecycle policy for tactical and negated exit 
   for(const text of ['再来一局，不要擅自退出游戏','再来一局，如果危险就退出游戏','start a game, stop shooting'])assert.equal(entryIntent(text).play,true,text);
   for(const text of ['先不要开新局','晚点再来一局','do not start the game'])assert.equal(entryIntent(text).play,false,text);
 });
+
+test('bare stop words next to a combat instruction do not stop a running match', async () => {
+  const {humanStopIntent, entryIntent} = await import('../shared/entry-intent.js');
+  for (const text of ['别打了，快撤','不要打了，去撤离点','不打了，搜箱子','先不打，绕过去','等等，前面有人','停！有埋伏','停，左边有人','stop, enemy on the left'])
+    assert.deepEqual(humanStopIntent(text), {stopped:false, abandon:false}, text);
+  // Alone, or with filler and talk addressed to the assistant, they still stop.
+  for (const text of ['别打了','停','等一下','stop','好了，别打了','停一下，我看看','先停一下，告诉我现在状态'])
+    assert.equal(humanStopIntent(text).stopped, true, text);
+  // Naming the game or playing itself is explicit and works next to anything.
+  for (const text of ['不玩了，快撤','停止游戏，前面有人也不管','好的，不玩了，谢谢'])
+    assert.equal(humanStopIntent(text).stopped, true, text);
+  assert.deepEqual(humanStopIntent('别打了，退出这局，快点'), {stopped:true, abandon:true});
+  // Before entry there is no combat to confuse: every stop clause counts.
+  assert.equal(humanStopIntent('等等，前面有人', {inMatch:false}).stopped, true);
+  assert.equal(entryIntent('等一下，我改下装备').stopped, true);
+});

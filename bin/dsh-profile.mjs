@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parseDocument, isMap, isSeq } from "yaml";
 import { AtomicStore, syncDirectory } from "../lib/store.js";
@@ -170,20 +171,169 @@ export function writeAtomic(file, content, mode = 0o600) {
   }
 }
 
-export function lockProfile(profile) {
-  const file = path.join(
-    profile,
-    ".dsh-local-plugins",
-    "install",
-    "profile.json",
-  );
+export const lockFile = (profile) =>
+  path.join(profile, ".dsh-local-plugins", "install", "profile.json.lock");
+
+const processAlive = (pid) => {
   try {
-    return new AtomicStore(file);
+    process.kill(pid, 0);
+    return true;
   } catch (error) {
-    throw failure(
-      error.code === "store_locked" ? "profile_install_locked" : error.code,
-    );
+    return error.code === "EPERM";
   }
+};
+
+// Who holds an installer lock. "running": a live process on this machine.
+// "stale": its process is gone, e.g. the installer was killed or the machine
+// lost power. "unknown": unreadable, incomplete or written on another machine.
+export function inspectLock(file, { alive = processAlive, host = os.hostname() } = {}) {
+  let holder;
+  try {
+    holder = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return { state: "released" };
+    return { state: "unknown" };
+  }
+  const pid = Number.isSafeInteger(holder?.pid) && holder.pid > 0 ? holder.pid : null;
+  if (pid === null) return { state: "unknown" };
+  if (typeof holder.host === "string" && holder.host !== host)
+    return { state: "unknown", pid };
+  return { state: alive(pid) ? "running" : "stale", pid };
+}
+
+const lockedFailure = (file, inspected) =>
+  Object.assign(failure("profile_install_locked"), {
+    lock_file: file,
+    holder: inspected.state,
+    ...(inspected.pid ? { pid: inspected.pid } : {}),
+  });
+
+export function lockProfile(profile, { forceUnlock = false, inspect = inspectLock } = {}) {
+  const store = path.join(profile, ".dsh-local-plugins", "install", "profile.json");
+  const open = () => new AtomicStore(store);
+  try {
+    return open();
+  } catch (error) {
+    if (error.code !== "store_locked") throw failure(error.code);
+  }
+  const file = lockFile(profile),
+    inspected = inspect(file);
+  // A live installer is never interrupted, even with --force-unlock. Anything
+  // else needs the person's explicit request: only they can rule out another
+  // machine sharing this profile directory.
+  if (!forceUnlock || inspected.state === "running")
+    throw lockedFailure(file, inspected);
+  try {
+    const before = fs.lstatSync(file);
+    if (!before.isFile()) throw failure("profile_install_locked");
+    // Re-check the same file right before removal so a lock taken over by a
+    // new installer in the meantime is left alone.
+    const again = inspect(file),
+      after = fs.lstatSync(file);
+    if (again.state === "running" || after.ino !== before.ino || after.dev !== before.dev)
+      throw lockedFailure(file, again);
+    fs.unlinkSync(file);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error.code ? error : lockedFailure(file, inspected);
+  }
+  try {
+    return open();
+  } catch (error) {
+    if (error.code === "store_locked") throw lockedFailure(file, inspect(file));
+    throw failure(error.code);
+  }
+}
+
+// Every install keeps an immutable runtime, a backup and the packed archive.
+// After a successful commit, keep the newest backups and whatever the active
+// bundle or those backups still reference; delete the rest. Failures here never
+// undo a committed install: they are reported for a later run to retry.
+export function pruneInstallations({ profile, keepBackups = 2, keep = [] }) {
+  const local = path.join(profile, ".dsh-local-plugins"),
+    backups = path.join(local, "backups"),
+    modules = path.join(profile, "node_modules"),
+    current = path.join(modules, "dsh-model-action");
+  const removed = [],
+    pending = [];
+  const remove = (target) => {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      removed.push(path.relative(profile, target));
+    } catch {
+      pending.push(path.relative(profile, target));
+    }
+  };
+  const directories = (dir, pattern) => {
+    try {
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => pattern.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink()))
+        .map((entry) => entry.name);
+    } catch (error) {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    }
+  };
+  // Backup names start with the creation time in milliseconds.
+  const stamp = (name) => Number(/^model-action-(\d+)/.exec(name)?.[1] ?? 0);
+  const ordered = directories(backups, /^model-action-\d+/).sort(
+    (a, b) => stamp(b) - stamp(a) || (a < b ? 1 : -1),
+  );
+  const kept = ordered.slice(0, keepBackups).map((name) => path.join(backups, name));
+  for (const name of ordered.slice(keepBackups)) remove(path.join(backups, name));
+
+  const runtimes = new Set(),
+    archives = new Set();
+  const runtimeOf = (target) => {
+    try {
+      const relative = path.relative(fs.realpathSync(local), fs.realpathSync(target));
+      const first = relative.split(path.sep)[0];
+      if (first && !relative.startsWith("..") && first.startsWith("runtime-")) runtimes.add(first);
+    } catch {
+      /* A dangling link references nothing that still exists. */
+    }
+  };
+  const archivesOf = (workspace) => {
+    try {
+      for (const match of fs.readFileSync(workspace, "utf8").matchAll(/\.dsh-local-plugins\/([^\s'"]+\.tgz)/g))
+        archives.add(match[1]);
+    } catch {
+      /* No workspace file, so no archive reference. */
+    }
+  };
+  for (const target of keep) runtimeOf(target);
+  if (exists(current)) runtimeOf(current);
+  archivesOf(path.join(profile, "pnpm-workspace.yaml"));
+  for (const backup of kept) {
+    const entry = path.join(backup, "installed-entry");
+    if (exists(entry)) runtimeOf(entry);
+    archivesOf(path.join(backup, "pnpm-workspace.yaml"));
+  }
+  // Windows installs copy the bundle, so nothing links back to a runtime.
+  // Keep the newest runtimes as well, one per retained backup, so the previous
+  // install stays intact on every platform.
+  const age = (name) => {
+    try {
+      return fs.statSync(path.join(local, name)).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  const allRuntimes = directories(local, /^runtime-/).sort((a, b) => age(b) - age(a));
+  for (const name of allRuntimes.slice(0, keepBackups)) runtimes.add(name);
+  for (const name of allRuntimes)
+    if (!runtimes.has(name)) remove(path.join(local, name));
+  let files = [];
+  try {
+    files = fs.readdirSync(local).filter((name) => /^dsh-model-action-.+\.tgz$/.test(name));
+  } catch {
+    /* Nothing to prune. */
+  }
+  for (const name of files) if (!archives.has(name)) remove(path.join(local, name));
+  // Leftovers of earlier interrupted or partially cleaned installs.
+  for (const name of directories(modules, /^(?:dsh-model-action\.previous-|\.model-action-next-)/))
+    remove(path.join(modules, name));
+  return { removed, pending };
 }
 
 export function backupProfile(profile, snapshot, current, backup) {

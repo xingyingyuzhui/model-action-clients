@@ -14,7 +14,7 @@ const HASH = value => createHash('sha256').update(value).digest('hex');
 const FRIENDLY_ERRORS = {
   arena_human_authorization_required: '请在当前对话告诉我是否继续游玩；不用重复游戏名称。',
   arena_human_confirmation_required: '请先核对当前配置；确认、提问或修改都可以自然表达。',
-  store_locked: '这个会话的私有凭证正在被占用，请关闭重复的 DSH 实例后重试，保留身份文件。',
+  store_locked: '这个会话的私有凭证正被占用。请先关闭重复的 DSH 实例再重试；如果确认没有其他实例在运行，可能是上次强制退出留下的锁，请按插件 README「残留的会话锁」处理。不要删除身份文件。',
   store_lock_release_failed: '关闭时未能释放本会话的锁，请重试关闭并保留身份文件。',
   store_lock_changed: '会话锁的所有权已变化，已停止清理，请保留身份文件并检查重复实例。',
   arena_cleanup_failed: '部分会话资源未完成清理，请重试关闭。',
@@ -238,7 +238,8 @@ export function installArenaHost(ctx, config, dependencies) {
     if (input?.source?.kind !== 'user') return false;
     const text = typeof input.content === 'string' ? input.content : Array.isArray(input.content)
       ? input.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : '';
-    const intent = humanStopIntent(text);
+    // Bare "停"/"别打了" mid-match may be a combat instruction; before entry it is not.
+    const intent = humanStopIntent(text, { inMatch: state.runtime?.state?.().entry_state === 'in_world' });
     if (!intent.stopped) return false;
     state.humanStopPending = true;
     state.armed = false;
