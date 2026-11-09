@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.7.tgz
+npm install -g ./model-action-mcp-0.2.8.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.7.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.7/model-action-mcp-0.2.7.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.8/model-action-mcp-0.2.8.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -103,3 +103,9 @@ DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 B
 “为什么停止游戏”“因为什么会退出游戏”“他为什么想退出这局”等因果咨询不会触发停止或弃局。单独分句里的明确停止请求仍然生效，例如“退出这局，告诉我为什么失败”。
 
 DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注册，并实际完成备战入场。dump-config 与普通 import host.js 仅覆盖配置和模块入口，DSH peer 模块在 apply() 时动态加载。Windows 真实目录安装应携带完整依赖树，包含 @deepseek-ai/dsh-tools、@deepseek-ai/dsh-mcp-client、@deepseek-ai/dsh-llm，不能只复制 yaml。
+
+## Windows 状态存储（0.2.8）
+
+状态写入和迁移文件清理共用平台目录同步逻辑。Windows 尝试用 r+ 打开目录，仅在目录打开或同步返回 EPERM、EISDIR、EINVAL、ENOTSUP 时降级为尽力同步。文件写入、文件 fsync、替换失败及其他 I/O 错误仍会报错。macOS/Linux 保留严格目录同步。
+
+写入仍使用临时文件、文件 fsync 和原子替换。目录同步不可用时，突然断电后的目录元数据持久性取决于系统与文件系统。Windows/macOS CI 覆盖连续读写、重开、锁释放、原生授权持久化，以及文件失败回归。Windows ACL、Esafenet 环境和完整 DSH 实机游玩需另行验收。
