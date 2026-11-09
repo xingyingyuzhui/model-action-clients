@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-action",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Model行动 native DSH plugin: conversational admission, automatic entry and same-session gameplay loop.",
   "type": "module",
   "main": "./host.js",
@@ -60,6 +60,7 @@
     "test": "node --test test/*.test.mjs",
     "pack": "npm run build && node scripts/pack.mjs",
     "check": "npm run build && npm test && npm run pack",
-    "build:check": "node scripts/build.mjs --check"
+    "build:check": "node scripts/build.mjs --check",
+    "test:install": "node scripts/test-dsh-install.mjs"
   }
 }

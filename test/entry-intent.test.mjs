@@ -62,3 +62,18 @@ test('causal questions never authorize stopping or abandoning a match',async()=>
     assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:false},text);
   assert.deepEqual(humanStopIntent('无论为何先退出这局'),{stopped:true,abandon:true});
 });
+
+test('negated, conditional, reported and tactical requests cannot authorize lifecycle changes', async () => {
+  const {humanStopIntent}=await import('../shared/entry-intent.js');
+  for(const text of ['我没有让你退出这局','不是让你退出游戏','继续玩，不要擅自退出游戏','如果快死了就退出这局','他刚才退出这局','如果我说停止游戏才停','stop shooting','stop moving','stop aiming','do not leave the game'])
+    assert.deepEqual(humanStopIntent(text),{stopped:false,abandon:false},text);
+  for(const text of ['请立即停止游戏','我现在不想玩了','麻烦你帮我停一下','please stop the game'])
+    assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:false},text);
+  for(const text of ['现在退出这局','请帮我退出游戏','I want to quit the game'])
+    assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:true},text);
+});
+
+test('repeat entry uses the same lifecycle policy for tactical and negated exit instructions',()=>{
+  for(const text of ['再来一局，不要擅自退出游戏','再来一局，如果危险就退出游戏','start a game, stop shooting'])assert.equal(entryIntent(text).play,true,text);
+  for(const text of ['先不要开新局','晚点再来一局','do not start the game'])assert.equal(entryIntent(text).play,false,text);
+});

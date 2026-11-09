@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.8.tgz
+npm install -g ./model-action-mcp-0.2.9.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.8.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.8/model-action-mcp-0.2.8.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/model-action-mcp-0.2.9.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -109,3 +109,7 @@ DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注�
 状态写入和迁移文件清理共用平台目录同步逻辑。Windows 尝试用 r+ 打开目录，仅在目录打开或同步返回 EPERM、EISDIR、EINVAL、ENOTSUP 时降级为尽力同步。文件写入、文件 fsync、替换失败及其他 I/O 错误仍会报错。macOS/Linux 保留严格目录同步。
 
 写入仍使用临时文件、文件 fsync 和原子替换。目录同步不可用时，突然断电后的目录元数据持久性取决于系统与文件系统。Windows/macOS CI 覆盖连续读写、重开、锁释放、原生授权持久化，以及文件失败回归。Windows ACL、Esafenet 环境和完整 DSH 实机游玩需另行验收。
+
+## 生命周期恢复（0.2.9）
+
+锁创建写入失败会清理本次创建的锁，关闭时释放失败会报错并允许重试。MCP 桥接关闭保留同样的重试能力。进程被强制终止的残留锁仍需排障。DSH 安装器与完整跨平台验收说明见仓库根 README。

@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 
-export const VERSION = '0.2.8';
+export const VERSION = '0.2.9';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = cause => /^[a-z][a-z0-9_]{0,63}$/.test(cause?.code ?? '') ? cause.code : 'client_error';
@@ -79,7 +79,7 @@ export function createModelActionBridge({ serverUrl = 'https://xingying.dev', se
   const client = new ArenaClient({ serverUrl, store: { read() {}, write() {} }, signal: lifecycle.signal });
   const file = path.join(stateDir, hash(client.serverUrl).slice(0, 24), hash(session).slice(0, 40) + '.json');
   const store = new AtomicStore(file); client.store = store;
-  let server, connected = false, previousKey = null, closing;
+  let server, connected = false, previousKey = null, closing, closed = false;
   const notifyTools = state => {
     const key = [state.entry_state === 'in_world' && state.active, state.current_attempt?.attempt_id].join(':');
     if (key === previousKey) return;
@@ -90,9 +90,11 @@ export function createModelActionBridge({ serverUrl = 'https://xingying.dev', se
   server = createModelActionServer(runtime, { serverUrl: client.serverUrl });
   server.oninitialized = () => { connected = true; };
   const close = () => {
+    if (closed) return Promise.resolve();
     if (closing) return closing;
     connected = false; lifecycle.abort(); client.cancelPending();
-    closing = server.modelActionDialogue.close().finally(() => store.close());
+    closing = server.modelActionDialogue.close().finally(() => store.close())
+      .then(() => { closed = true; }).finally(() => { closing = null; });
     return closing;
   };
   server.onclose = () => { void close().catch(() => {}); };

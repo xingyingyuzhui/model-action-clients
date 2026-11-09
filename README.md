@@ -6,27 +6,29 @@ Model行动的独立客户端仓库。根目录是标准 DSH 插件 **`dsh-model
 
 ## 安装 DSH 插件
 
-与 dsh-chat-tune 等插件一样，从 GitHub 仓库直接安装，不需要 npm Registry：
+Desktop 使用构建包自带的安装器，需要 Node.js 22+，宿主合同为官方 DSH 0.2.2-rc.1。
+
+完全退出 DSH 后，在系统终端执行。macOS / Linux 使用以下命令。
+
+```sh
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/dsh-model-action-0.2.9.tgz model-action-install-dsh --profile desktop
+```
+
+Windows PowerShell 使用 npm 自带的命令入口。
+
+```powershell
+npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.9/dsh-model-action-0.2.9.tgz model-action-install-dsh --profile desktop
+```
+
+安装器会保留模型配置，校验文件与完整依赖、实际加载插件并验证 8 个工具注册及卸载。输出 `verified:true` 后，完全重启 DSH，在新会话里说“开启 Model行动”。`--dry-run` 只检查计划，已有旧插件时追加 `--replace-legacy` 完成备份和迁移。
+
+同一个 profile 的安装会互斥。安装期间检测到配置被其他进程修改会终止提交，加载失败会回滚本次改动。旧 runtime 与备份保留，软链接备份依赖对应旧 runtime，请一并保留。发生外部编辑与回滚冲突时保留外部内容并报告 `profile_recovery_conflict`，需结合备份检查。进程被强制终止后的残留锁仍需排障。
+
+支持插件安装命令的独立 CLI profile，也可从 GitHub 安装。
 
 ```sh
 dsh plugin --profile web add github:xingyingyuzhui/model-action-clients
 ```
-
-Desktop 用户从 App 托盘“打开终端”，使用其内置 CLI：
-
-```sh
-dsh plugin add github:xingyingyuzhui/model-action-clients
-```
-
-安装后重启对应 DSH 会话。宿主合同为官方 DSH 0.2.2-rc.1，需要 Node.js 22+。普通外部 CLI 不负责 Desktop profile，避免用外部 CLI 强行操作桌面配置。
-
-桌面 profile 由 Electron 管理、CLI 拒绝操作时，使用构建包自带安装器。先完全退出 DSH，再执行以下命令（Windows 请通过 npx 运行）：
-
-```sh
-npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.8/dsh-model-action-0.2.8.tgz model-action-install-dsh --profile desktop
-```
-
-已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
 
 ## 在 DSH 对话中开始游戏
 
@@ -37,7 +39,7 @@ npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/relea
 插件只打开对话准备，不默认开局，不要求跳转网页：
 
 1. **资格授权**：插件先查询服务器准入策略，公开开放时直接进入备战；邀请制下首次使用时，Agent 会索取 Model行动 邀请码或完整邀请链接。用户直接在当前对话提供，Agent 调用无参数 `arena_submit_invite`；插件从这条真人消息读取，不将邀请码复制到工具参数、输出或回复。已保存且有效的资格可复用。
-2. **选择配置**：在对话中说明昵称、模型少女形象、装备配置、模式和房间。例如“昵称小鱼，Qwen 娘，步枪，持久搜打撤，公开持久房”。大逃杀可选择自动匹配房间。
+2. **选择配置**：在对话中说明昵称、角色外观、装备配置、模式和房间。例如“昵称小鱼，Qwen 娘，步枪，持久搜打撤，公开持久房”。大逃杀可选择自动匹配房间。
 3. **核对方案**：Agent 使用服务端目录给出完整中文摘要，调用 `arena_prepare` 仅保存方案，不排队开局。要修改配置就重新给出摘要，旧确认 ID 失效。
 4. **自然确认**：首次核对方案后，用普通说法同意即可，例如“行，开始吧，这次多搜一点再撤离”。不必逐字匹配口令；中间问过问题，也可以随后确认同一份未变的方案。修改配置时重新核对变更，方案过期时刷新摘要。
 
@@ -60,8 +62,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.8.tgz
-- model-action-mcp-0.2.8.tgz
+- dsh-model-action-0.2.9.tgz
+- model-action-mcp-0.2.9.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -73,7 +75,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.8.tgz
+npm install -g ./dist/model-action-mcp-0.2.9.tgz
 ```
 
 然后配置 MCP：
@@ -138,3 +140,9 @@ DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注�
 状态写入和迁移文件清理共用平台目录同步逻辑。Windows 尝试用 r+ 打开目录，仅在目录打开或同步返回 EPERM、EISDIR、EINVAL、ENOTSUP 时降级为尽力同步。文件写入、文件 fsync、替换失败及其他 I/O 错误仍会报错。macOS/Linux 保留严格目录同步。
 
 写入仍使用临时文件、文件 fsync 和原子替换。目录同步不可用时，突然断电后的目录元数据持久性取决于系统与文件系统。Windows/macOS CI 覆盖连续读写、重开、锁释放、原生授权持久化，以及文件失败回归。Windows ACL、Esafenet 环境和完整 DSH 实机游玩需另行验收。
+
+## 安装与生命周期回归（0.2.9）
+
+发布验证增加打包后真实安装、重复升级、损坏包拒绝、配置保护、备份与失败回滚。安装完成前，在独立进程里调用实际 apply() 并验证工具注册和卸载。Windows、macOS、Linux CI 还会使用官方 DSH 0.2.2-rc.1 进行四轮对话、备战入场、游戏调用、再入场和真人退出。模型与游戏响应为显式本地测试桩，未使用付费模型，完整生产游戏和企业 DLP 环境需单独验收。
+
+停止意图按完整的直接请求识别。“我没有让你退出这局”“如果快死了就退出这局”“stop shooting”等不会触发生命周期改变。明确的“请立即停止游戏”“现在退出这局”继续生效。锁创建失败清理本次锁，释放失败会报错并允许重试；宿主清理失败也会尝试关闭存储。备战连接中的停止会取消底层请求。
