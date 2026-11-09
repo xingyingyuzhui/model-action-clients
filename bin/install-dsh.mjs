@@ -22,6 +22,7 @@ import {
   backupProfile,
   commitProfile,
   writeAtomic,
+  pruneInstallations,
 } from "./dsh-profile.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,9 +31,24 @@ const pkg = JSON.parse(
 );
 const args = process.argv.slice(2),
   profiles = [];
+const FLAGS = ["--dry-run", "--replace-legacy", "--force-unlock"];
 const dryRun = args.includes("--dry-run"),
-  replaceLegacy = args.includes("--replace-legacy");
+  replaceLegacy = args.includes("--replace-legacy"),
+  forceUnlock = args.includes("--force-unlock");
 let diagnosticLog;
+// Ctrl-C would otherwise end the process before any cleanup, leaving the
+// install lock behind. The first signal stops at the next safe point and lets
+// the normal rollback and lock release run; a second one exits immediately.
+let interrupted = false;
+for (const signal of ["SIGINT", "SIGTERM"])
+  process.on(signal, () => {
+    if (interrupted) process.exit(130);
+    interrupted = true;
+    progress("收到中断，正在回滚并释放锁；再按一次会立即退出（可能遗留锁）");
+  });
+const checkInterrupted = () => {
+  if (interrupted) throw failure("install_interrupted");
+};
 const progress = (message) =>
   process.stderr.write("Model行动 " + message + "\n");
 
@@ -73,6 +89,7 @@ function runNpm(command, arguments_, cwd, timeout) {
     "\n" + arguments_[0] + "\n" + (result.stdout ?? "") + (result.stderr ?? ""),
     { mode: 0o600 },
   );
+  if (result.signal || interrupted) throw failure("install_interrupted");
   if (result.status !== 0)
     throw failure(
       result.error?.code === "ETIMEDOUT"
@@ -100,7 +117,7 @@ async function installProfile(profileName, home, packed, command) {
   const profile = path.join(home, "profiles", profileName);
   if (!fs.existsSync(path.join(profile, "package.json")))
     throw failure("profile_missing");
-  const lock = lockProfile(profile);
+  const lock = lockProfile(profile, { forceUnlock });
   let report, next;
   try {
     const snapshot = readProfile(profile);
@@ -163,6 +180,7 @@ async function installProfile(profileName, home, packed, command) {
     fs.rmdirSync(next);
     placeDshBundle({ runtime, staged, current: next });
     verifyBundle(next, packed.manifest, diagnosticLog);
+    checkInterrupted();
     const committed = await commitProfile({
       profile,
       snapshot,
@@ -172,6 +190,12 @@ async function installProfile(profileName, home, packed, command) {
       verify: (directory) =>
         verifyBundle(directory, packed.manifest, diagnosticLog),
     });
+    let pruned;
+    try {
+      pruned = pruneInstallations({ profile, keep: [runtime] });
+    } catch {
+      pruned = { removed: [], pending: ["prune_failed"] };
+    }
     report = {
       profile: profileName,
       version: pkg.version,
@@ -182,8 +206,9 @@ async function installProfile(profileName, home, packed, command) {
       registered_tools: 8,
       isolated_bundle_runtime: true,
       host_app_unchanged: true,
-      ...(committed.cleanupPending
-        ? { cleanup_pending: committed.cleanupPending }
+      pruned: pruned.removed.length,
+      ...(committed.cleanupPending || pruned.pending.length
+        ? { cleanup_pending: [committed.cleanupPending, ...pruned.pending].filter(Boolean) }
         : {}),
     };
   } finally {
@@ -200,12 +225,12 @@ async function installProfile(profileName, home, packed, command) {
 async function main() {
   if (args.includes("--help")) {
     process.stdout.write(
-      "model-action-install-dsh --profile <existing-profile> [--dry-run] [--replace-legacy]\n",
+      "model-action-install-dsh --profile <existing-profile> [--dry-run] [--replace-legacy] [--force-unlock]\n",
     );
     return;
   }
   for (let index = 0; index < args.length; index++) {
-    if (["--dry-run", "--replace-legacy"].includes(args[index])) continue;
+    if (FLAGS.includes(args[index])) continue;
     if (
       args[index] !== "--profile" ||
       !/^[a-zA-Z0-9_-]{1,60}$/.test(args[index + 1] ?? "")
@@ -259,8 +284,10 @@ async function main() {
       hash: sha256(source),
       manifest: packageManifest(root, packed.files),
     };
-    for (const profile of [...new Set(profiles)])
+    for (const profile of [...new Set(profiles)]) {
+      checkInterrupted();
       await installProfile(profile, home, bundle, command);
+    }
     completed = true;
   } finally {
     if (completed) fs.rmSync(temporary, { recursive: true, force: true });
@@ -273,7 +300,7 @@ try {
   const messages = {
     profile_changed_during_install:
       "安装期间配置发生变化，已中止提交，请关闭其他配置编辑或安装操作后重试。",
-    profile_install_locked: "该 profile 正在被安装器占用，请等待已有安装结束。",
+    install_interrupted: "安装已中断，配置已回滚或未改动，锁已释放，可以直接重新安装。",
     installed_file_mismatch: "文件内容校验失败，请检查文件转换或安全软件策略。",
     bundle_load_failed: "插件或依赖未能通过真实加载验证，请查看排障日志。",
     profile_recovery_conflict:
@@ -284,7 +311,20 @@ try {
     invalid_profile_json:
       "profile 的 package.json 不是有效 JSON，请先修复配置。",
   };
-  const code = error.code ?? "installation_failed";
+  let code = error.code ?? "installation_failed";
+  // Recovery problems keep their own codes; any other failure caused by the
+  // interrupt (an npm child killed by the same Ctrl-C) is reported as such.
+  if (interrupted && !/^profile_recovery_/.test(code)) code = "install_interrupted";
+  const locked = {
+    running: `该 profile 正在被另一个安装器使用（进程 ${error.pid}），请等它结束后再试。`,
+    stale: `上次安装没有正常结束（进程 ${error.pid} 已不存在），留下了锁文件。确认没有其他安装在运行后，加上 --force-unlock 重新安装。`,
+    unknown: "无法确认锁文件归属（内容不完整，或来自另一台机器）。确认没有任何机器在安装这个 profile 后，加上 --force-unlock 重新安装。",
+    released: "锁刚被释放，请直接重试。",
+  };
+  if (code === "profile_install_locked")
+    messages[code] =
+      (locked[error.holder] ?? "该 profile 正在被安装器占用，请等待已有安装结束。") +
+      (error.lock_file ? "\n锁文件 " + error.lock_file : "");
   process.stderr.write(
     "Model行动安装失败 " +
       code +
@@ -293,5 +333,5 @@ try {
       "\n",
   );
   if (diagnosticLog) process.stderr.write("排障日志 " + diagnosticLog + "\n");
-  process.exitCode = 1;
+  process.exitCode = code === "install_interrupted" ? 130 : 1;
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 
 const MAX_BYTES = 1024 * 1024;
@@ -58,7 +59,7 @@ export class AtomicStore {
       this.lockIdentity = fs.fstatSync(fd);
       this.ownsLock = true;
       try {
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, nonce: this.nonce }));
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, host: os.hostname(), nonce: this.nonce }));
         fs.fsyncSync(fd);
       } catch (error) {
         this.release({ incomplete: true });

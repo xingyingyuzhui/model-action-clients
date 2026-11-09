@@ -22,6 +22,12 @@ npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/r
 
 安装器会保留模型配置，校验文件与完整依赖、实际加载插件并验证 8 个工具注册及卸载。输出 `verified:true` 后，完全重启 DSH，在新会话里说“开启 Model行动”。`--dry-run` 只检查计划，已有旧插件时追加 `--replace-legacy` 完成备份和迁移。
 
+安装成功后会自动清理旧文件：只保留最近 2 份备份，以及当前插件和这两份备份还在用的依赖目录和安装包，其余删除。输出里的 `pruned` 是删除的数量；个别文件删不掉时列在 `cleanup_pending` 里，下次安装会再试，不影响本次安装结果。
+
+**安装被中断。** 安装时按一次 Ctrl-C，安装器会回滚配置、释放锁后退出，可以直接重装。如果连按两次、强制关窗口或断电，锁文件可能残留，之后再装会提示 `profile_install_locked`，并说明锁的状态：
+- 「另一个安装器正在使用」：确实有安装在运行，等它结束即可；
+- 「上次安装没有正常结束」或「无法确认归属」：确认没有其他安装在运行（包括共享这个 profile 的其他机器）后，在原命令末尾加上 `--force-unlock` 重装。正在运行的安装器不会被强制解锁。
+
 同一个 profile 的安装会互斥。安装期间检测到配置被其他进程修改会终止提交，加载失败会回滚本次改动。旧 runtime 与备份保留，软链接备份依赖对应旧 runtime，请一并保留。发生外部编辑与回滚冲突时保留外部内容并报告 `profile_recovery_conflict`，需结合备份检查。进程被强制终止后的残留锁仍需排障。
 
 支持插件安装命令的独立 CLI profile，也可从 GitHub 安装。
@@ -127,7 +133,16 @@ node scripts/e2e-natural-entry.mjs --game-dir /absolute/path/to/agent-extraction
 
 DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 BOM JSON。Windows 安装使用真实目录，保留精确版本依赖，并由插件自身 bundle patch 加载一次。不要在 profile patch 再插入 model-action-native。Windows 分支尚未实机验证。
 
-正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，目前会拒绝访问并提示 store_locked，需要排障；关闭重复实例只解决活跃占用，不能自动清除残留锁。
+正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，插件会拒绝访问并提示 store_locked，不会自动清除，见下面「残留的会话锁」。
+
+### 残留的会话锁
+
+提示 `store_locked` 时，先关闭所有 DSH 窗口和进程（或其他 MCP 宿主）再重试。仍然提示的话，就是强制退出留下的锁，需要你本人手动删除：
+
+- DSH 插件：`~/.dsh/plugins/dsh-model-action/` 下各子目录里以 `.json.lock` 结尾的文件（设置了 `DSH_HOME` 时在 `$DSH_HOME/plugins/dsh-model-action/`）；
+- MCP 包：`~/.model-action/mcp/` 下各子目录里以 `.json.lock` 结尾的文件。
+
+只删 `.lock` 文件，不要删同名的 `.json` 身份文件，也不要让模型去做这一步：插件会阻止模型访问这些目录。
 
 ## 因果咨询与加载验收（0.2.7）
 
