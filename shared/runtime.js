@@ -1,5 +1,6 @@
 // Context-neutral lifecycle coordination. Native dsh owns model turns, followup
 // and budgets; this module never spawns models, approves pairings or uses cookies.
+import { VERSION } from './version.js';
 const locks = new WeakMap();
 const SAFE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const GAME_PATHS = new Set(['/mcp','/agent-game/mcp']);
@@ -46,12 +47,19 @@ function toolData(result) {
 // Gameplay advice for the model. Only parameters the server's own step schema
 // declares are suggested, so an older server never receives unknown fields.
 export const EARLY_RETURN_TIP='调用 step 时建议 hold_ms 设为 1000，同时带 return_after_ms 300~500：观察会提前返回，按键继续生效，角色边走你边想下一步，不会原地停顿。世界不会等你，决策越快、越简短，拿到的信息越新；每一步以最新观察为准，不必回顾很早以前的观察。';
+// Servers on rules 0.7.0+ accept holds up to 5 s and say so in the schema.
+export const LONG_HOLD_TIP='调用 step 时，hold_ms 按你预计下一次决策要多久来设（通常 3000~5000），同时带 return_after_ms 300~500：观察会提前返回，按键继续生效，角色边走你边想下一步，不会原地停顿；新指令会立即替换旧按键。按键不会因为遇敌自动停下，看到敌人或撞墙要尽快发新指令改向、开火或停步。世界不会等你，决策越快、越简短，拿到的信息越新；每一步以最新观察为准，不必回顾很早以前的观察。';
 export function supportsEarlyReturn(tools){return Array.isArray(tools)&&tools.some(tool=>tool?.name==='step'&&!!tool.inputSchema?.properties?.return_after_ms);}
+export function maxHoldMs(tools){
+  const step=Array.isArray(tools)?tools.find(tool=>tool?.name==='step'):null;
+  const max=step?.inputSchema?.properties?.input?.properties?.hold_ms?.maximum;
+  return Number.isFinite(max)?max:null;
+}
 
 export class ArenaRuntime {
   constructor({client,transport,onWake=()=>{},onTerminal=()=>{},onState=()=>{},clock=Date.now,
     heartbeatMs=5000,pollMs=2000,maxBackoffMs=30000,gameTimeoutMs=70000,
-    label='Model行动 client',version='0.2.10',model,fetcher=globalThis.fetch}={}) {
+    label='Model行动 client',version=VERSION,model,fetcher=globalThis.fetch}={}) {
     if(!client||typeof client.session!=='function'||typeof client.publicState!=='function'||
       [onWake,onTerminal,onState,clock].some(fn=>typeof fn!=='function')||
       [heartbeatMs,pollMs,maxBackoffMs,gameTimeoutMs].some(n=>!Number.isSafeInteger(n)||n<1)||
@@ -280,7 +288,7 @@ export class ArenaRuntime {
     }
     return clone(this.tools);
   }
-  gameplayHint(){return supportsEarlyReturn(this.tools)?EARLY_RETURN_TIP:null;}
+  gameplayHint(){if(!supportsEarlyReturn(this.tools))return null;return (maxHoldMs(this.tools)??1000)>=3000?LONG_HOLD_TIP:EARLY_RETURN_TIP;}
   async callGame(name,args={},signal) {
     if(this.view.entry_state!=='in_world')throw error('attempt_not_in_world');
     if(typeof name!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(name)||!args||typeof args!=='object'||Array.isArray(args))throw error('invalid_tool_call');

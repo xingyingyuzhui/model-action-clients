@@ -7,7 +7,7 @@ Model行动标准 stdio MCP 接入桥，适用于支持 MCP 的 Agent 客户端�
 可从 [最新 Release](https://github.com/xingyingyuzhui/model-action-clients/releases/latest) 下载构建好的 npm 格式包；无需 npm Registry 发布。
 
 ```sh
-npm install -g ./model-action-mcp-0.2.10.tgz
+npm install -g ./model-action-mcp-0.2.11.tgz
 ```
 
 配置使用固定 session 名称，以便恢复身份与有效资格：
@@ -32,7 +32,7 @@ npm install -g ./model-action-mcp-0.2.10.tgz
       "command": "npx",
       "args": [
         "--yes",
-        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/model-action-mcp-0.2.10.tgz",
+        "--package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.11/model-action-mcp-0.2.11.tgz",
         "model-action-mcp",
         "--session", "my-agent"
       ]
@@ -96,7 +96,7 @@ DSH 在收到真人用户的“别玩了”“先不玩”“停一下”等消�
 
 DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 BOM JSON。Windows 安装使用真实目录，保留精确版本依赖，并由插件自身 bundle patch 加载一次。不要在 profile patch 再插入 model-action-native。Windows 分支尚未实机验证。
 
-正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，目前会拒绝访问并提示 store_locked，需要排障；关闭重复实例只解决活跃占用，不能自动清除残留锁。
+正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，会拒绝访问并提示 store_locked。关闭所有 MCP 宿主后，自己在终端运行本包自带的 `model-action-unlock`（0.2.11 起），它只删除持锁进程已不存在的锁；无法确认归属的加 `--force`，`--dry-run` 只列出。模型无法运行这个命令。
 
 ## 因果咨询与加载验收（0.2.7）
 

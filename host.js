@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { onboardingView } from './lib/onboarding.js';
+import { VERSION } from './lib/version.js';
 import { installCredentialGuard, sanitizePublicValue, gameToolDescription, gameToolOutput } from './lib/credential-guard.js';
 import { entryIntent, humanStopIntent } from './lib/entry-intent.js';
 
@@ -14,7 +15,7 @@ const HASH = value => createHash('sha256').update(value).digest('hex');
 const FRIENDLY_ERRORS = {
   arena_human_authorization_required: '请在当前对话告诉我是否继续游玩；不用重复游戏名称。',
   arena_human_confirmation_required: '请先核对当前配置；确认、提问或修改都可以自然表达。',
-  store_locked: '这个会话的私有凭证正被占用。请先关闭重复的 DSH 实例再重试；如果确认没有其他实例在运行，可能是上次强制退出留下的锁，请按插件 README「残留的会话锁」处理。不要删除身份文件。',
+  store_locked: '这个会话的私有凭证正被占用。请先关闭重复的 DSH 实例再重试；如果确认没有其他实例在运行，可能是上次强制退出留下的锁，请你本人在终端运行 model-action-unlock（见插件 README「残留的会话锁」）。不要删除身份文件。',
   store_lock_release_failed: '关闭时未能释放本会话的锁，请重试关闭并保留身份文件。',
   store_lock_changed: '会话锁的所有权已变化，已停止清理，请保留身份文件并检查重复实例。',
   arena_cleanup_failed: '部分会话资源未完成清理，请重试关闭。',
@@ -203,7 +204,7 @@ export function installArenaHost(ctx, config, dependencies) {
         } else if (session.state === 'in_world') {
           if (!abandon) return { stopped: true, character_state: 'still_in_world', entry_state: session.state, exit_confirmed: false };
           // This observer owns no agent scope, continuation or game entry intent.
-          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.10', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
+          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: VERSION, onState: () => {}, onWake: () => {}, onTerminal: () => {} });
           await passive.start({ autoEnter: false });
           result = await passive.stop('user_stop', { abandon: true });
           if (result.terminal_confirmed !== true || result.character_state !== 'ended') return publicValue({ ...result, exit_confirmed: false });
@@ -379,7 +380,7 @@ export function installArenaHost(ctx, config, dependencies) {
   }
   async function loadAccess(state, exec, ticket) {
     const generation = state.generation, dialogue = state.dialogue;
-    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.10' });
+    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: VERSION });
     exec.signal.throwIfAborted(); if (state.generation !== generation || state.dialogue !== dialogue || disposed) fail('arena_dialogue_cancelled');
     const local = await state.client.publicState();
     state.dialogue.connected = true;
@@ -543,7 +544,7 @@ export function installArenaHost(ctx, config, dependencies) {
     exec.signal.addEventListener('abort', cancelled, { once: true });
     try {
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.10',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: VERSION,
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });

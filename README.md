@@ -11,13 +11,13 @@ Desktop 使用构建包自带的安装器，需要 Node.js 22+，宿主合同为
 完全退出 DSH 后，在系统终端执行。macOS / Linux 使用以下命令。
 
 ```sh
-npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/dsh-model-action-0.2.10.tgz model-action-install-dsh --profile desktop
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.11/dsh-model-action-0.2.11.tgz model-action-install-dsh --profile desktop
 ```
 
 Windows PowerShell 使用 npm 自带的命令入口。
 
 ```powershell
-npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.10/dsh-model-action-0.2.10.tgz model-action-install-dsh --profile desktop
+npx.cmd --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.11/dsh-model-action-0.2.11.tgz model-action-install-dsh --profile desktop
 ```
 
 安装器会保留模型配置，校验文件与完整依赖、实际加载插件并验证 8 个工具注册及卸载。输出 `verified:true` 后，完全重启 DSH，在新会话里说“开启 Model行动”。`--dry-run` 只检查计划，已有旧插件时追加 `--replace-legacy` 完成备份和迁移。
@@ -68,8 +68,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.10.tgz
-- model-action-mcp-0.2.10.tgz
+- dsh-model-action-0.2.11.tgz
+- model-action-mcp-0.2.11.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -81,7 +81,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.10.tgz
+npm install -g ./dist/model-action-mcp-0.2.11.tgz
 ```
 
 然后配置 MCP：
@@ -137,12 +137,18 @@ DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 B
 
 ### 残留的会话锁
 
-提示 `store_locked` 时，先关闭所有 DSH 窗口和进程（或其他 MCP 宿主）再重试。仍然提示的话，就是强制退出留下的锁，需要你本人手动删除：
+提示 `store_locked` 时，先关闭所有 DSH 窗口和进程（或其他 MCP 宿主）再重试。仍然提示的话，就是强制退出留下的锁。在终端里自己运行（把版本号换成你安装的版本，0.2.11 起可用）：
 
-- DSH 插件：`~/.dsh/plugins/dsh-model-action/` 下各子目录里以 `.json.lock` 结尾的文件（设置了 `DSH_HOME` 时在 `$DSH_HOME/plugins/dsh-model-action/`）；
-- MCP 包：`~/.model-action/mcp/` 下各子目录里以 `.json.lock` 结尾的文件。
+```bash
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.11/dsh-model-action-0.2.11.tgz model-action-unlock
+```
 
-只删 `.lock` 文件，不要删同名的 `.json` 身份文件，也不要让模型去做这一步：插件会阻止模型访问这些目录。
+- 命令会检查 `~/.dsh/plugins/dsh-model-action/`（或 `$DSH_HOME/plugins/dsh-model-action/`）和 `~/.model-action/mcp/` 下的 `.json.lock` 文件；
+- 持锁进程已经不存在的，直接删除；还在运行的，一律保留；无法确认归属的（内容不完整或来自另一台机器），确认没有任何实例在用后，加 `--force` 才删；
+- 加 `--dry-run` 只列出会删除的锁；
+- 只删 `.lock` 文件，不读也不删同名的 `.json` 身份文件。
+
+这一步要你本人做：插件会阻止模型运行这个命令，也会阻止模型访问这些目录。
 
 ## 因果咨询与加载验收（0.2.7）
 
@@ -170,3 +176,10 @@ DSH 安装后需完全退出并重启，再确认 arena_status 等工具已注�
 - “别打了，快撤”“等等，前面有人”“停！有埋伏”这类带着其他指令的话不会停止。
 - 说出对象或者说“玩”，比如“不玩了”“停止游戏”“退出这局”，在任何位置都生效。
 - 开局前没有交火，“等一下，我改下装备”仍然会推迟开局。
+
+## 长按键建议与会话解锁（0.2.11）
+
+- 服务器支持长按键（规则 0.7.0 起，`hold_ms` 最长 5000ms）时，局内提示改为推荐 `hold_ms` 3000~5000 加 `return_after_ms` 300~500，并提醒按键不会因遇敌自动停下。连旧服务器时仍是 1000 的旧建议。
+- 游戏工具的结果不再附加固定提示，这句话只保留在工具说明里，每局少读几十遍。
+- 新增 `model-action-unlock` 命令，清理强制退出留下的会话锁，见上面「残留的会话锁」。
+- 客户端上报的版本号统一从 `package.json` 读取。
