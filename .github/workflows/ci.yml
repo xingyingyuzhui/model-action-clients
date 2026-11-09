@@ -20,3 +20,19 @@ jobs:
         with:
           name: model-action-npm-packages
           path: dist/
+
+  store-durability:
+    name: store-durability (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node --test test/store-durability.test.mjs test/client-native.test.mjs
