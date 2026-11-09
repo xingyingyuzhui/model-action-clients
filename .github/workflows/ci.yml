@@ -24,6 +24,7 @@ jobs:
   installation-and-runtime:
     name: installation-and-runtime (${{ matrix.os }})
     needs: test-and-pack
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -41,4 +42,8 @@ jobs:
           name: model-action-npm-packages
           path: dist/
       - run: node --test test/store-durability.test.mjs test/client-native.test.mjs test/install-dsh.test.mjs test/dsh-profile.test.mjs test/entry-intent.test.mjs test/dsh-host.test.mjs test/mcp-close.test.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
       - run: npm run test:install

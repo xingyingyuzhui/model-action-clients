@@ -30,15 +30,15 @@ const check = (name) => {
   console.log(JSON.stringify({ check: name, pass: true }));
 };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-function runNpm(args, cwd = root, expected = 0) {
+function runNpm(args, cwd = root, expected = 0, timeout = 240000) {
   const result = spawnSync(process.execPath, [npm, ...args], {
     cwd,
     env,
     encoding: "utf8",
-    timeout: 240000,
+    timeout,
     maxBuffer: 6 * 1024 * 1024,
   });
-  assert.equal(result.status, expected, result.stderr);
+  assert.equal(result.status, expected, result.error?.code ?? result.stderr);
   return result;
 }
 function install(file = archive, expected = 0) {
@@ -156,7 +156,9 @@ try {
       dependencies: { "@deepseek-ai/dsh": "0.2.2-rc.1" },
     }),
   );
-  runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], tools);
+  assert.ok(Number(process.versions.node.split(".")[0]) >= 24, "The official DSH CLI requires Node >=24.9; use Node 24 for test:install");
+  console.log(JSON.stringify({stage: "preparing official DSH CLI fixture"}));
+  runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], tools, 0, 600000);
   const cli = path.join(
     tools,
     "node_modules",
