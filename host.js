@@ -15,6 +15,9 @@ const FRIENDLY_ERRORS = {
   arena_human_authorization_required: '请在当前对话告诉我是否继续游玩；不用重复游戏名称。',
   arena_human_confirmation_required: '请先核对当前配置；确认、提问或修改都可以自然表达。',
   store_locked: '这个会话的私有凭证正在被占用，请关闭重复的 DSH 实例后重试，保留身份文件。',
+  store_lock_release_failed: '关闭时未能释放本会话的锁，请重试关闭并保留身份文件。',
+  store_lock_changed: '会话锁的所有权已变化，已停止清理，请保留身份文件并检查重复实例。',
+  arena_cleanup_failed: '部分会话资源未完成清理，请重试关闭。',
   store_permissions: '私有凭证目录权限检查失败，请检查当前系统账户的访问权限。',
   arena_confirmation_stale: '这份备战方案已变更或过期，请重新核对当前配置。',
 };
@@ -154,8 +157,10 @@ export function installArenaHost(ctx, config, dependencies) {
     return null;
   }
   async function removeScope(state) {
-    const scope = state.scope; state.scope = null; state.scopeCtx = null;
-    if (scope) await scope.dispose();
+    const scope = state.scope, scopeCtx = state.scopeCtx; state.scope = null; state.scopeCtx = null;
+    if (scope) {
+      try { await scope.dispose(); } catch (error) { state.scope = scope; state.scopeCtx = scopeCtx; throw error; }
+    }
   }
   async function stop(state, reason = 'user_stop', { abandon = ['time_limit', 'budget_limit'].includes(reason), cancel = true, restoreScope = true, forceRestoreScope = false, keepInbox = false } = {}) {
     if (!state) return { stopped: true, character_state: 'unknown' };
@@ -166,6 +171,7 @@ export function installArenaHost(ctx, config, dependencies) {
     notify(state);
     if (cancel && state.agent.status === 'running') state.agent.cancel({ kind: 'parent' }, { keepInbox });
     if (state.stopFlight) return state.stopFlight;
+    state.client.cancelPending?.();
     state.stopFlight = (async () => {
       let result;
       try { result = await state.runtime?.stop(reason, { abandon }); }
@@ -197,7 +203,7 @@ export function installArenaHost(ctx, config, dependencies) {
         } else if (session.state === 'in_world') {
           if (!abandon) return { stopped: true, character_state: 'still_in_world', entry_state: session.state, exit_confirmed: false };
           // This observer owns no agent scope, continuation or game entry intent.
-          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.8', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
+          passive = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.9', onState: () => {}, onWake: () => {}, onTerminal: () => {} });
           await passive.start({ autoEnter: false });
           result = await passive.stop('user_stop', { abandon: true });
           if (result.terminal_confirmed !== true || result.character_state !== 'ended') return publicValue({ ...result, exit_confirmed: false });
@@ -346,8 +352,9 @@ export function installArenaHost(ctx, config, dependencies) {
     if (state.scope) return;
     const fiber = state.agent.ctx.plugin({ name: 'model-action-session-tools', inject: ['tools'], apply(inner) {
       state.scopeCtx = inner;
-      for (const definition of definitions) inner.tools.register(definition);
-      inner.tools.restrict({ allow: [] });
+      // Controls keep their global identity while a game scope is removed.
+      // A new human request can safely await teardown without a stale tool.
+      inner.tools.restrict({ allow: ARENA_NAMES });
       inner.tools.guard?.(exec => state.terminalClosing
         ? ['arena_status', 'arena_stop'].includes(exec.name) ? undefined : 'Game ended; report the confirmed result without further actions'
         : ARENA_NAMES.includes(exec.name) || state.gameNames.has(exec.name) ? undefined : 'Model行动 session permits only game tools');
@@ -371,7 +378,7 @@ export function installArenaHost(ctx, config, dependencies) {
   }
   async function loadAccess(state, exec, ticket) {
     const generation = state.generation, dialogue = state.dialogue;
-    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.8' });
+    const native = await state.client.connectNative({ ...(ticket === undefined ? {} : { ticket }), label: 'Model行动 · DSH', version: '0.2.9' });
     exec.signal.throwIfAborted(); if (state.generation !== generation || state.dialogue !== dialogue || disposed) fail('arena_dialogue_cancelled');
     const local = await state.client.publicState();
     state.dialogue.connected = true;
@@ -535,7 +542,7 @@ export function installArenaHost(ctx, config, dependencies) {
     exec.signal.addEventListener('abort', cancelled, { once: true });
     try {
       if (exec.signal.aborted || !state.armed || disposed) fail('arena_start_cancelled');
-      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.8',
+      state.runtime = new ArenaRuntime({ client: state.client, clock, label: 'Model行动 · DSH', version: '0.2.9',
         onState: view => { if (state.generation !== generation) return; notify(state); if (state.armed && view.phase === 'error' && view.active === false) void stop(state, 'client_error'); },
         onWake: event => { if (state.generation === generation) entered(state, event); },
         onTerminal: async ({ result }) => { if (state.generation === generation) await terminal(state, result); } });
@@ -642,18 +649,21 @@ export function installArenaHost(ctx, config, dependencies) {
   }));
   listeners.push(ctx.on('agent/error', ({ agent }) => { const state = states.get(agent); if (state?.armed) void stop(state, 'client_error', { cancel: false }); }));
   async function disposeState(state) {
-    await stop(state, 'user_stop', { forceRestoreScope: true });
-    // A terminal stop may already be in flight with deferred scope restoration.
-    await removeScope(state); await state.store.close(); states.delete(state.agent);
+    try {
+      await stop(state, 'user_stop', { forceRestoreScope: true });
+      await removeScope(state);
+    } finally { await state.store.close(); }
+    states.delete(state.agent);
   }
   listeners.push(ctx.on('agent/disposed', ({ agent }) => { const state = states.get(agent); if (state) return disposeState(state); }));
   let disposal;
   const dispose = () => disposal ??= (async () => {
-    disposed = true; for (const off of listeners) off();
-    await Promise.allSettled([...states.values()].map(disposeState));
-    for (const off of disposers) off();
+    disposed = true; for (const off of listeners.splice(0)) off();
+    const results = await Promise.allSettled([...states.values()].map(disposeState));
+    for (const off of disposers.splice(0)) off();
     removeCredentialGuard();
-  })();
+    if (results.some(result => result.status === 'rejected')) fail('arena_cleanup_failed');
+  })().finally(() => { disposal = null; });
   ctx.effect(() => dispose, 'model-action-native.lifecycle');
   return { dispose };
 }

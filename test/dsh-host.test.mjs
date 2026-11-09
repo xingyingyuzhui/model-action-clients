@@ -89,7 +89,7 @@ function fixture(config = {}, { qualified = true, clock = Date.now, pending = fa
       async whenIdle() {}, scopeState: state, scoped,
     };
     agent.ctx = { plugin(plugin) {
-      const inner = { tools: { register: register(scoped), restrict(filter) { assert.deepEqual(filter, { allow: [] }); state.restricted = true; },
+      const inner = { tools: { register: register(scoped), restrict(filter) { assert.deepEqual(filter, { allow: ['arena_start','arena_connect','arena_submit_invite','arena_prepare','arena_confirm','arena_status','arena_repair_pairing','arena_stop'] }); state.restricted = true; },
         guard(fn) { state.guards.push(fn); } } };
       let active = true;
       const loaded = Promise.resolve().then(() => plugin.apply(inner));
@@ -356,7 +356,7 @@ test('arena_stop during terminal closing cannot restore external tools before tu
   assert.equal(a.scopeState.restricted, true);
   const stopped = await f.run('arena_stop', {}, a);
   assert.equal(stopped.character_state, 'ended');
-  assert.equal(a.scopeState.restricted, true); assert.ok(a.scoped.has('arena_status'));
+  assert.equal(a.scopeState.restricted, true); assert.ok(f.globals.has('arena_status')); assert.equal(a.scoped.has('arena_status'),false);
   assert.ok(a.scopeState.guards[0]({ name: 'read_file' }));
   assert.ok(a.scopeState.guards[0]({ name: 'mcp__model_action__observe' }));
   await f.emit('session/event', a.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
@@ -671,7 +671,7 @@ test('existing game stop requires current authentic explicit abandonment and doe
   assert.equal(still.character_state,'still_in_world');assert.equal(still.exit_confirmed,false);assert.equal(f.runtimes.length,0);
   assert.equal((await f.run('arena_status',{},a)).phase,'existing_game');
   const ended=await f.run('arena_stop',{abandon:true},a);assert.equal(ended.exit_confirmed,true);assert.equal(ended.terminal_confirmed,true);
-  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.8');
+  assert.equal(f.runtimes.length,1);assert.deepEqual(f.runtimes[0].startOptions,{autoEnter:false});assert.equal(f.runtimes[0].options.version,'0.2.9');
   assert.equal(a.injections.length,0);assert.equal(a.followups.length,0);assert.equal(a.scopeState.restricted,false);assert.equal(a.scoped.size,0);
   nextHumanTurn(a,'开始Model行动');assert.equal((await f.run('arena_start',{},a)).phase,'configuring');
 });
@@ -733,4 +733,24 @@ test('terminal injection sanitizes credential values outside the tool-output hoo
   const f=fixture();t.after(()=>f.host.dispose());const a=f.agent('terminal-sanitized');await beginGame(f,a);f.runtimes[0].enter();await flush();
   const synthetic='model_beta_invite_'+'A'.repeat(43);await f.runtimes[0].terminal({outcome:'won',ticket:synthetic,note:synthetic});
   const notice=a.injections.find(m=>m.source?.purpose==='arena-terminal');assert.ok(notice);assert.ok(!JSON.stringify(notice).includes(synthetic));assert.ok(JSON.stringify(notice).includes('won'));
+});
+
+test('scope cleanup failures still close the store and can be retried',async()=>{
+  const f=fixture(),a=f.agent('scope-release-retry'),original=a.ctx.plugin;let failOnce=true;
+  a.ctx.plugin=(...args)=>{const scope=original(...args),dispose=scope.dispose;scope.dispose=async()=>{if(failOnce){failOnce=false;throw new Error('fixture_scope_failure');}return dispose();};return scope;};
+  await beginGame(f,a);
+  await assert.rejects(f.host.dispose(),{code:'arena_cleanup_failed'});
+  assert.equal(f.stores[0].closed,true);
+  await f.host.dispose();assert.equal(a.scopeState.restricted,false);
+});
+
+test('a human stop aborts pending admission before a runtime has been created',async t=>{
+  const f=fixture(),a=f.agent('admission-stop');t.after(()=>f.host.dispose());
+  await f.run('arena_start',{},a);nextHumanTurn(a,'打开游戏');
+  let reject;const held=new Promise((_resolve,r)=>reject=r);
+  f.clients[0].connectNative=()=>held;
+  f.clients[0].cancelPending=()=>reject(Object.assign(new Error('fixture_cancel'),{code:'request_cancelled'}));
+  const flight=f.run('arena_start',{},a),rejected=assert.rejects(flight,{code:'request_cancelled'});
+  await flush();await f.emit('session/event',a.session,{type:'user/message',data:{source:{kind:'user'},content:'停一下'}});
+  await rejected;assert.equal((await f.run('arena_status',{},a)).phase,'stopped');
 });

@@ -21,12 +21,14 @@ jobs:
           name: model-action-npm-packages
           path: dist/
 
-  store-durability:
-    name: store-durability (${{ matrix.os }})
+  installation-and-runtime:
+    name: installation-and-runtime (${{ matrix.os }})
+    needs: test-and-pack
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,4 +37,18 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: node --test test/store-durability.test.mjs test/client-native.test.mjs
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-action-npm-packages
+          path: dist/
+      - run: node --test test/store-durability.test.mjs test/client-native.test.mjs test/install-dsh.test.mjs test/dsh-profile.test.mjs test/entry-intent.test.mjs test/dsh-host.test.mjs test/mcp-close.test.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Prepare official DSH host
+        timeout-minutes: 10
+        run: npm install --prefix "${{ runner.temp }}/model-action-official-host" --ignore-scripts --no-audit --no-fund --workspaces=false --global=false --loglevel=info @deepseek-ai/dsh@0.2.2-rc.1
+      - run: npm run test:install
+        env:
+          MODEL_ACTION_DSH_CLI: ${{ runner.temp }}/model-action-official-host/node_modules/@deepseek-ai/dsh/lib/bin.js

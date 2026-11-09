@@ -113,3 +113,24 @@ test('native authorization persists through the real file store and reconnects a
   } finally { await store.close(); }
   assert.equal(fs.existsSync(file + '.lock'), false);
 });
+
+test('failed lock persistence cleans up the newly created lock before a retry',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'model-lock-create-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'session.json');
+  const fault=t.mock.method(fs,'fsyncSync',()=>{throw failure('EIO');});
+  try{assert.throws(()=>new AtomicStore(file),{code:'store_unavailable'});}finally{fault.mock.restore();}
+  assert.equal(fs.existsSync(file+'.lock'),false);
+  const store=new AtomicStore(file);await store.close();
+});
+
+test('failed lock release rejects close and remains retryable without removing a new owner',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'model-lock-release-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'session.json'),store=new AtomicStore(file);
+  const fault=t.mock.method(fs,'unlinkSync',()=>{throw failure('EPERM');});
+  try{await assert.rejects(store.close(),{code:'store_lock_release_failed'});}finally{fault.mock.restore();}
+  await store.close();assert.equal(fs.existsSync(file+'.lock'),false);
+  const next=new AtomicStore(file);
+  fs.writeFileSync(file+'.lock',JSON.stringify({nonce:'other-owner'}));
+  await assert.rejects(next.close(),{code:'store_lock_changed'});
+  assert.equal(fs.existsSync(file+'.lock'),true);
+});

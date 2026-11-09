@@ -55,8 +55,15 @@ export class AtomicStore {
     let fd;
     try {
       fd = fs.openSync(this.lock, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, nonce: this.nonce }));
-      fs.fsyncSync(fd); this.ownsLock = true;
+      this.lockIdentity = fs.fstatSync(fd);
+      this.ownsLock = true;
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, nonce: this.nonce }));
+        fs.fsyncSync(fd);
+      } catch (error) {
+        this.release({ incomplete: true });
+        throw error;
+      }
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       ownRegular(this.lock);
@@ -64,10 +71,18 @@ export class AtomicStore {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
   }
 
-  release() {
+  release({ incomplete = false } = {}) {
     if (!this.ownsLock) return;
-    try { if (JSON.parse(fs.readFileSync(this.lock, 'utf8')).nonce === this.nonce) fs.unlinkSync(this.lock); } catch { /* Never remove a lock whose ownership cannot be verified. */ }
-    this.ownsLock = false;
+    try {
+      const stat = ownRegular(this.lock);
+      if (stat.dev !== this.lockIdentity.dev || stat.ino !== this.lockIdentity.ino ||
+          (!incomplete && JSON.parse(fs.readFileSync(this.lock, 'utf8')).nonce !== this.nonce)) throw failure('store_lock_changed');
+      fs.unlinkSync(this.lock);
+      this.ownsLock = false;
+    } catch (error) {
+      if (error.code === 'ENOENT') { this.ownsLock = false; return; }
+      throw failure(error.code === 'store_lock_changed' ? error.code : 'store_lock_release_failed');
+    }
   }
 
   assertOpen() { if (this.closed) throw failure('store_closed'); }
@@ -153,5 +168,5 @@ export class AtomicStore {
     const next = this.chain.then(run, run); this.chain = next.catch(() => {}); return next;
   }
 
-  async close() { await this.chain; if (this.closed) return; this.closed = true; this.release(); }
+  async close() { await this.chain; this.closed = true; this.release(); }
 }
