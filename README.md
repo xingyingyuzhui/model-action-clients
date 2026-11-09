@@ -20,10 +20,10 @@ dsh plugin add github:xingyingyuzhui/model-action-clients
 
 安装后重启对应 DSH 会话。宿主合同为官方 DSH 0.2.2-rc.1，需要 Node.js 22+。普通外部 CLI 不负责 Desktop profile，避免用外部 CLI 强行操作桌面配置。
 
-若桌面 profile 要求精确版本，可使用构建包自带安装器：
+桌面 profile 由 Electron 管理、CLI 拒绝操作时，使用构建包自带安装器。先完全退出 DSH，再执行以下命令（Windows 请通过 npx 运行）：
 
 ```sh
-npx --yes --package=./dist/dsh-model-action-0.2.5.tgz model-action-install-dsh --profile desktop
+npx --yes --package=https://github.com/xingyingyuzhui/model-action-clients/releases/download/v0.2.6/dsh-model-action-0.2.6.tgz model-action-install-dsh --profile desktop
 ```
 
 已有旧参赛插件时，安装器默认拒绝重复加载。确认替换可追加 --replace-legacy；它会备份旧配置，替换 bundle、依赖与对应配置 ID，保留模型配置及旧私有身份文件。新插件需重新配对。追加 --dry-run 可先查看计划。
@@ -36,7 +36,7 @@ npx --yes --package=./dist/dsh-model-action-0.2.5.tgz model-action-install-dsh -
 
 插件只打开对话准备，不默认开局，不要求跳转网页：
 
-1. **资格授权**：首次使用时，Agent 会索取 Model行动 邀请码或完整邀请链接。用户直接在当前对话提供，Agent 调用无参数 `arena_submit_invite`；插件从这条真人消息读取，不将邀请码复制到工具参数、输出或回复。已保存且有效的资格可复用。
+1. **资格授权**：插件先查询服务器准入策略，公开开放时直接进入备战；邀请制下首次使用时，Agent 会索取 Model行动 邀请码或完整邀请链接。用户直接在当前对话提供，Agent 调用无参数 `arena_submit_invite`；插件从这条真人消息读取，不将邀请码复制到工具参数、输出或回复。已保存且有效的资格可复用。
 2. **选择配置**：在对话中说明昵称、模型少女形象、装备配置、模式和房间。例如“昵称小鱼，Qwen 娘，步枪，持久搜打撤，公开持久房”。大逃杀可选择自动匹配房间。
 3. **核对方案**：Agent 使用服务端目录给出完整中文摘要，调用 `arena_prepare` 仅保存方案，不排队开局。要修改配置就重新给出摘要，旧确认 ID 失效。
 4. **自然确认**：首次核对方案后，用普通说法同意即可，例如“行，开始吧，这次多搜一点再撤离”。不必逐字匹配口令；中间问过问题，也可以随后确认同一份未变的方案。修改配置时重新核对变更，方案过期时刷新摘要。
@@ -60,8 +60,8 @@ npm run check
 
 构建结果位于 dist/：
 
-- dsh-model-action-0.2.5.tgz
-- model-action-mcp-0.2.5.tgz
+- dsh-model-action-0.2.6.tgz
+- model-action-mcp-0.2.6.tgz
 - SHA256SUMS、manifest.json
 
 GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](https://github.com/xingyingyuzhui/model-action-clients/actions) 下载。没有 npm Registry 发布步骤，也不需要 npm 发布凭证。
@@ -73,7 +73,7 @@ GitHub Actions 运行测试并上传同样的构建产物，可在 [Actions](htt
 安装构建好的标准包：
 
 ```sh
-npm install -g ./dist/model-action-mcp-0.2.5.tgz
+npm install -g ./dist/model-action-mcp-0.2.6.tgz
 ```
 
 然后配置 MCP：
@@ -118,3 +118,11 @@ DSH 在收到真人用户的“别玩了”“先不玩”“停一下”等消�
 ```bash
 node scripts/e2e-natural-entry.mjs --game-dir /absolute/path/to/agent-extraction-arena --stop
 ```
+
+## 停止意图与 Windows 安装调整（0.2.6）
+
+“如何停止游戏”“怎么退出游戏”“有没有办法退出游戏”等咨询不会停止对局。“别玩了吧”“不要再打了”“算了不玩了吧”等自然停止请求会解除续行，明确退出仍会尝试服务端弃局。
+
+DSH 安装器兼容带 UTF-8 BOM 的 profile package.json，写回时使用无 BOM JSON。Windows 安装使用真实目录，保留精确版本依赖，并由插件自身 bundle patch 加载一次。不要在 profile patch 再插入 model-action-native。Windows 分支尚未实机验证。
+
+正常关闭会释放会话文件锁。强制结束进程或断电可能遗留锁文件，目前会拒绝访问并提示 store_locked，需要排障；关闭重复实例只解决活跃占用，不能自动清除残留锁。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-action",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Model行动 native DSH plugin: conversational admission, automatic entry and same-session gameplay loop.",
   "type": "module",
   "main": "./host.js",
