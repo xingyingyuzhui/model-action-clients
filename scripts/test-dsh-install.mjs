@@ -520,7 +520,7 @@ async function run(ctx) {
     process.execPath,
     [
       "--import",
-      guard,
+      pathToFileURL(guard).href,
       cli,
       "--profile",
       "audit",
@@ -551,6 +551,9 @@ async function run(ctx) {
   assert.equal(gameSteps, 3);
   assert.equal(abandoned, 3);
   assert.equal(state, "ended");
+  const privateFiles = fs.readdirSync(path.join(home, "plugins", "dsh-model-action"), { recursive: true });
+  assert.ok(privateFiles.some(name => name.endsWith(".json")));
+  assert.equal(privateFiles.some(name => name.endsWith(".json.lock")), false, "plugin locks must be released when the official host exits");
   const log = JSON.parse(fs.readFileSync(projection));
   const stop = log.findIndex(
     (event) =>
