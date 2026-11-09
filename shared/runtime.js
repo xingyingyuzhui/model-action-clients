@@ -51,7 +51,7 @@ export function supportsEarlyReturn(tools){return Array.isArray(tools)&&tools.so
 export class ArenaRuntime {
   constructor({client,transport,onWake=()=>{},onTerminal=()=>{},onState=()=>{},clock=Date.now,
     heartbeatMs=5000,pollMs=2000,maxBackoffMs=30000,gameTimeoutMs=70000,
-    label='Model行动 client',version='0.2.4',model,fetcher=globalThis.fetch}={}) {
+    label='Model行动 client',version='0.2.5',model,fetcher=globalThis.fetch}={}) {
     if(!client||typeof client.session!=='function'||typeof client.publicState!=='function'||
       [onWake,onTerminal,onState,clock].some(fn=>typeof fn!=='function')||
       [heartbeatMs,pollMs,maxBackoffMs,gameTimeoutMs].some(n=>!Number.isSafeInteger(n)||n<1)||
@@ -231,7 +231,7 @@ export class ArenaRuntime {
   async failed(cause) {
     const err=safeError(cause);
     if(!this.active||err.code==='request_cancelled')return this.state();
-    const fatal=[400,401,403,404,422].includes(err.status)||['entry_cancelled','invalid_client_input','pairing_cancelled','pairing_required','store_corrupt','store_origin_mismatch','profile_not_saved','grant_consumed','unsafe_mcp_url','unsupported_schema'].includes(err.code);
+    const fatal=[400,401,403,404,422].includes(err.status)||['entry_cancelled','invalid_client_input','pairing_cancelled','pairing_required','store_corrupt','store_locked','store_permissions','store_origin_mismatch','profile_not_saved','grant_consumed','unsafe_mcp_url','unsupported_schema'].includes(err.code);
     if(fatal){
       this.active=false;clearTimeout(this.timer);this.lifecycle.abort();this.gameController.abort();
       if(locks.get(this.client)===this)locks.delete(this.client);

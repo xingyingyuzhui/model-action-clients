@@ -1,15 +1,12 @@
 // Transport-neutral conversation state for MCP. The MCP host owns user intent:
 // tool arguments are not authenticated human-message evidence.
+import { sanitizePublicValue } from './credential-guard.js';
 import { randomBytes } from 'node:crypto';
 const fail = code => { throw Object.assign(new Error(code), {code}); };
 const clone = value => structuredClone(value);
 const fields = ['name','character_id','loadout_id','mode_id','room_id'];
 const busyStates = new Set(['queued','offered','waiting','countdown','in_world']);
-const safe = value => {
-  if (Array.isArray(value)) return value.map(safe);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key])=>!/(?:token|secret|receipt|proof|cookie|authorization|pairing|lobby_url)/i.test(key)).map(([key,item])=>[key,safe(item)]));
-  return value ?? null;
-};
+const safe = sanitizePublicValue;
 export function validateObject(value, allowed) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!allowed.includes(key))) fail('invalid_client_input');
 }

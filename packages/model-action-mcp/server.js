@@ -3,13 +3,13 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ElicitResultSchema } fro
 import { ArenaClient } from './lib/client.js';
 import { ArenaRuntime } from './lib/runtime.js';
 import { McpDialogue } from './lib/mcp-dialogue.js';
-import { containsPrivateCredentials } from './lib/credential-guard.js';
+import { containsPrivateCredentials, gameToolDescription, gameToolOutput } from './lib/credential-guard.js';
 import { AtomicStore } from './lib/store.js';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 
-export const VERSION = '0.2.4';
+export const VERSION = '0.2.5';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = cause => /^[a-z][a-z0-9_]{0,63}$/.test(cause?.code ?? '') ? cause.code : 'client_error';
@@ -45,7 +45,7 @@ export function createModelActionServer(runtime, {serverUrl='https://xingying.de
   server.setRequestHandler(ListToolsRequestSchema,async()=>{
     let game=[];
     if(runtime.state().entry_state==='in_world'&&runtime.state().active){try{game=await runtime.listGameTools();}catch{}}
-    return {tools:[...controls,...game.map(tool=>({...tool,name:'game_'+tool.name}))]};
+    return {tools:[...controls,...game.map(tool=>({...tool,name:'game_'+tool.name,description:gameToolDescription(tool.description??'')}))]};
   });
   server.setRequestHandler(CallToolRequestSchema,async(request,extra)=>{
     const {name,arguments:args={}}=request.params;
@@ -61,7 +61,7 @@ export function createModelActionServer(runtime, {serverUrl='https://xingying.de
         if(!/^game_[a-z][a-z0-9_]{0,63}$/.test(name))fail('unknown_tool');
         const game=await runtime.callGame(name.slice(5),args,extra.signal);
         if(containsPrivateCredentials(game))fail('private_output_blocked');
-        return game;
+        return gameToolOutput(game);
       }
       if(containsPrivateCredentials(value))fail('private_output_blocked');
       return result(value);

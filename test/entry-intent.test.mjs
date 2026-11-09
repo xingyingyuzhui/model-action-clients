@@ -29,3 +29,14 @@ test('configuration changes pause entry while explicit unchanged settings remain
   for(const value of ['等我确认后再开始','先看看配置，再开始'])assert.equal(entryIntent(value).play,false,value);
   for(const value of ['可以换成Qwen娘吗？','装备能改成冲锋枪吗？'])assert.equal(entryIntent(value).configurationChanged,true,value);
 });
+
+test('natural stopping phrases are distinct from tactical or quoted discussion', async () => {
+  const {humanStopIntent} = await import('../shared/entry-intent.js');
+  for (const text of ['别玩了','先不玩','不玩了','停一下','停止游戏','先暂停一下','停止','先别打了','先停一下，告诉我现在状态'])
+    assert.equal(humanStopIntent(text).stopped, true, text);
+  for (const text of ['别太早撤离，再来一轮','别打那扇门','不要停，继续玩','请翻译 stop game','他说“停止游戏”','stop writing','解释一下停止游戏的意思'])
+    assert.equal(humanStopIntent(text).stopped, false, text);
+  for(const text of ['退出这局','退出游戏吧','别玩了，退出这局','先不玩，放弃本局','stop game, quit the match'])
+    assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:true},text);
+  assert.deepEqual(humanStopIntent('停一下'),{stopped:true,abandon:false});
+});
