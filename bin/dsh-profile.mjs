@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parseDocument, isMap, isSeq } from "yaml";
 import { AtomicStore, syncDirectory } from "../lib/store.js";
+import { inspectLock } from "../lib/lock-inspect.js";
 
 export const profileFiles = [
   "package.json",
@@ -174,32 +174,8 @@ export function writeAtomic(file, content, mode = 0o600) {
 export const lockFile = (profile) =>
   path.join(profile, ".dsh-local-plugins", "install", "profile.json.lock");
 
-const processAlive = (pid) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-};
-
-// Who holds an installer lock. "running": a live process on this machine.
-// "stale": its process is gone, e.g. the installer was killed or the machine
-// lost power. "unknown": unreadable, incomplete or written on another machine.
-export function inspectLock(file, { alive = processAlive, host = os.hostname() } = {}) {
-  let holder;
-  try {
-    holder = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) {
-    if (error.code === "ENOENT") return { state: "released" };
-    return { state: "unknown" };
-  }
-  const pid = Number.isSafeInteger(holder?.pid) && holder.pid > 0 ? holder.pid : null;
-  if (pid === null) return { state: "unknown" };
-  if (typeof holder.host === "string" && holder.host !== host)
-    return { state: "unknown", pid };
-  return { state: alive(pid) ? "running" : "stale", pid };
-}
+// Shared with the session unlock command; see lib/lock-inspect.js.
+export { inspectLock };
 
 const lockedFailure = (file, inspected) =>
   Object.assign(failure("profile_install_locked"), {

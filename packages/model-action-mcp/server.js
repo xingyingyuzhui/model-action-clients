@@ -9,7 +9,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 
-export const VERSION = '0.2.10';
+export { VERSION } from './lib/version.js';
+import { VERSION } from './lib/version.js';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = cause => /^[a-z][a-z0-9_]{0,63}$/.test(cause?.code ?? '') ? cause.code : 'client_error';

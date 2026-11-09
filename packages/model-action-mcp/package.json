@@ -1,6 +1,6 @@
 {
   "name": "model-action-mcp",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Model行动 MCP stdio bridge with conversational invitations, preparation and authoritative game tools.",
   "type": "module",
   "license": "UNLICENSED",
@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "bin": {
-    "model-action-mcp": "./bin/model-action-mcp.mjs"
+    "model-action-mcp": "./bin/model-action-mcp.mjs",
+    "model-action-unlock": "./bin/model-action-unlock.mjs"
   },
   "exports": {
     ".": "./server.js",

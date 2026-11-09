@@ -88,7 +88,7 @@ test('public value sanitizer protects non-tool messages and preserves public adm
   assert.equal(result.invite_required,false);assert.equal(result.invite_id,'invite_public');assert.equal(result.outcome,'won');assert.equal(result.nested.value,2);
   assert.equal(containsPrivateCredentials(result),false);assert.ok(!JSON.stringify(result).includes('private-proof'));
   const output=gameToolOutput({content:[{type:'text',text:'{"ok":true,"tick":5}'}]});
-  assert.deepEqual(JSON.parse(output.content[0].text),{ok:true,tick:5});assert.match(output.content.at(-1).text,/用户的停止请求/);assert.match(gameToolDescription('step'),/step/);
+  assert.deepEqual(JSON.parse(output.content[0].text),{ok:true,tick:5});assert.equal(output.content.length,1,'results are not padded with the notice');assert.match(gameToolDescription('step'),/用户的停止请求[\s\S]*step/);
 });
 
 test('serialized tool data removes opaque credentials and file tools cannot spoof harmless commands',async()=>{

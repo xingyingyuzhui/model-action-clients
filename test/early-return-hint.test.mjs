@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ArenaRuntime, EARLY_RETURN_TIP, supportsEarlyReturn } from '../shared/runtime.js';
+import { ArenaRuntime, EARLY_RETURN_TIP, LONG_HOLD_TIP, supportsEarlyReturn, maxHoldMs } from '../shared/runtime.js';
 import { McpDialogue } from '../shared/mcp-dialogue.js';
 
 const step = properties => ({ name: 'step', inputSchema: { type: 'object', properties } });
@@ -27,4 +27,17 @@ test('MCP status adds the game_step hint while in the world', () => {
   assert.ok(!view.instructions.some(text => text.includes('return_after_ms')), 'older server');
   hint = EARLY_RETURN_TIP; entry = 'waiting'; view = dialogue.view();
   assert.ok(!view.instructions.some(text => text.includes('return_after_ms')), 'not in the world yet');
+});
+
+test('servers that accept long holds get the long-hold advice; older ones keep the 1 s advice', () => {
+  const longHold = { input: { type: 'object', properties: { hold_ms: { type: 'number', minimum: 100, maximum: 5000 } } }, return_after_ms: { type: 'number' } };
+  const shortHold = { input: { type: 'object', properties: { hold_ms: { type: 'number', description: '100–1000ms' } } }, return_after_ms: { type: 'number' } };
+  assert.equal(maxHoldMs([step(longHold)]), 5000);
+  assert.equal(maxHoldMs([step(shortHold)]), null, 'rules 0.6 schemas declare no maximum');
+  const hint = ArenaRuntime.prototype.gameplayHint;
+  assert.equal(hint.call({ tools: [step(longHold)] }), LONG_HOLD_TIP);
+  assert.equal(hint.call({ tools: [step(shortHold)] }), EARLY_RETURN_TIP);
+  assert.match(LONG_HOLD_TIP, /3000~5000/);
+  assert.match(LONG_HOLD_TIP, /return_after_ms 300~500/);
+  assert.match(LONG_HOLD_TIP, /调用 step/, 'MCP rewrites this prefix to game_step');
 });

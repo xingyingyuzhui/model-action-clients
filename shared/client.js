@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { VERSION } from './version.js';
 
 const SAFE = Symbol('arena-client-error');
 const error = (code, status = null, retryable = false) => Object.assign(new Error(code), { code, status, retryable, [SAFE]: true });
@@ -137,7 +138,7 @@ export class ArenaClient {
     return {admission_mode:policy.enabled===true&&policy.admission_mode==='open'&&policy.invite_required===false?'open':'invite',
       invite_required:!(policy.enabled===true&&policy.admission_mode==='open'&&policy.invite_required===false)};
   }
-  async connectNative({ticket,label='Model行动 client',version='0.2.10'}={}){
+  async connectNative({ticket,label='Model行动 client',version=VERSION}={}){
     requireText(label,60);requireText(version,40);
     if(ticket!==undefined){
       if(typeof ticket!=='string')throw error('invalid_invite_input');
