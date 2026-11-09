@@ -19,6 +19,11 @@ const archive = path.resolve(
 );
 const npm = process.env.npm_execpath;
 assert.ok(npm && fs.existsSync(npm), "Run through npm run test:install");
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+assert.ok(
+  nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 9),
+  "The official DSH CLI requires Node >=24.9; use Node 24 for test:install",
+);
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "model-installed-dsh-"));
 const profile = path.join(home, "profiles", "audit"),
   workspace = path.join(home, "workspace");
@@ -156,7 +161,6 @@ try {
       dependencies: { "@deepseek-ai/dsh": "0.2.2-rc.1" },
     }),
   );
-  assert.ok(Number(process.versions.node.split(".")[0]) >= 24, "The official DSH CLI requires Node >=24.9; use Node 24 for test:install");
   console.log(JSON.stringify({stage: "preparing official DSH CLI fixture"}));
   runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], tools, 0, 600000);
   const cli = path.join(
