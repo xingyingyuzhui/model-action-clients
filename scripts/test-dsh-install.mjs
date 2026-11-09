@@ -87,6 +87,7 @@ try {
     previousCode = fs.readFileSync(path.join(first.runtime, "node_modules", "dsh-model-action", "host.js"));
   assert.equal(first.verified, true);
   assert.equal(first.registered_tools, 8);
+  assert.equal(first.host_app_unchanged, true);
   let manifest = JSON.parse(
     fs.readFileSync(path.join(profile, "package.json")),
   );

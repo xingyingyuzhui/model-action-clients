@@ -181,6 +181,7 @@ async function installProfile(profileName, home, packed, command) {
       verified: true,
       registered_tools: 8,
       isolated_bundle_runtime: true,
+      host_app_unchanged: true,
       ...(committed.cleanupPending
         ? { cleanup_pending: committed.cleanupPending }
         : {}),
