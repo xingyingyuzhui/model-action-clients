@@ -40,3 +40,14 @@ test('natural stopping phrases are distinct from tactical or quoted discussion',
     assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:true},text);
   assert.deepEqual(humanStopIntent('停一下'),{stopped:true,abandon:false});
 });
+
+test('information questions do not authorize stops and natural refusal suffixes do',async()=>{
+  const {humanStopIntent}=await import('../shared/entry-intent.js');
+  for(const text of ['如何停止游戏','怎么退出游戏','有没有办法退出游戏','请问怎么退出游戏？','告诉我如何停止游戏','停止游戏会怎么样','How do I stop the game?','Is there a way to quit the match?'])
+    assert.deepEqual(humanStopIntent(text),{stopped:false,abandon:false},text);
+  for(const text of ['别玩了吧','不要再打了','算了不玩了吧','先别再玩了吧','不玩了吧','无论如何先停一下','不管怎么样都别玩了'])
+    assert.deepEqual(humanStopIntent(text),{stopped:true,abandon:false},text);
+  assert.deepEqual(humanStopIntent('停一下，告诉我怎么退出游戏'),{stopped:true,abandon:false});
+  assert.deepEqual(humanStopIntent('怎么停止游戏？退出这局'),{stopped:true,abandon:true});
+  assert.deepEqual(humanStopIntent('退出这局，告诉我怎么开始下一局'),{stopped:true,abandon:true});
+});
