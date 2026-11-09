@@ -79,7 +79,7 @@ try {
   );
   const first = JSON.parse(install().stdout.trim());
   const installed = path.join(profile, "node_modules", "dsh-model-action"),
-    previousTarget = fs.realpathSync(installed);
+    previousCode = fs.readFileSync(path.join(first.runtime, "node_modules", "dsh-model-action", "host.js"));
   assert.equal(first.verified, true);
   assert.equal(first.registered_tools, 8);
   let manifest = JSON.parse(
@@ -100,7 +100,8 @@ try {
     "fresh release-tarball installation verifies loading and preserves config",
   );
   const second = JSON.parse(install().stdout.trim());
-  assert.notEqual(fs.realpathSync(installed), previousTarget);
+  assert.notEqual(second.runtime, first.runtime);
+  assert.deepEqual(fs.readFileSync(path.join(first.runtime, "node_modules", "dsh-model-action", "host.js")), previousCode);
   assert.equal(
     JSON.parse(
       fs.readFileSync(

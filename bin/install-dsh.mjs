@@ -154,7 +154,7 @@ async function installProfile(profileName, home, packed, command) {
     );
     const staged = path.join(runtime, "node_modules", "dsh-model-action");
     progress(`${profileName} 正在校验文件和实际加载`);
-    verifyBundle(staged, packed.manifest, diagnosticLog);
+    verifyContents(staged, packed.manifest);
     assertUnchanged(profile, snapshot);
     fs.mkdirSync(path.dirname(current), { recursive: true });
     next = fs.mkdtempSync(
@@ -176,6 +176,7 @@ async function installProfile(profileName, home, packed, command) {
       profile: profileName,
       version: pkg.version,
       exact_pin: pkg.version,
+      runtime,
       backup,
       verified: true,
       registered_tools: 8,
