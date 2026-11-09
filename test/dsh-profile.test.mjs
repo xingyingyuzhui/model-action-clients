@@ -236,6 +236,9 @@ test("pruning keeps the newest backups and everything they or the active bundle 
     fs.writeFileSync(path.join(local, `dsh-model-action-0.0.${name}.tgz`), name);
   }
   fs.mkdirSync(path.join(local, "runtime-orphan"));
+  // Recency: d newest, then c; a and the orphan are old and unreferenced.
+  for (const [name, seconds] of [["a", 1000], ["orphan", 500], ["b", 2000], ["c", 3000], ["d", 4000]])
+    fs.utimesSync(path.join(local, "runtime-" + name), seconds, seconds);
   const backup = (stamp, name) => {
     const dir = path.join(local, "backups", `model-action-${stamp}-x${name}`);
     fs.mkdirSync(dir, { recursive: true });

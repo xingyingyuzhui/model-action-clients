@@ -309,7 +309,19 @@ export function pruneInstallations({ profile, keepBackups = 2, keep = [] }) {
     if (exists(entry)) runtimeOf(entry);
     archivesOf(path.join(backup, "pnpm-workspace.yaml"));
   }
-  for (const name of directories(local, /^runtime-/))
+  // Windows installs copy the bundle, so nothing links back to a runtime.
+  // Keep the newest runtimes as well, one per retained backup, so the previous
+  // install stays intact on every platform.
+  const age = (name) => {
+    try {
+      return fs.statSync(path.join(local, name)).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  const allRuntimes = directories(local, /^runtime-/).sort((a, b) => age(b) - age(a));
+  for (const name of allRuntimes.slice(0, keepBackups)) runtimes.add(name);
+  for (const name of allRuntimes)
     if (!runtimes.has(name)) remove(path.join(local, name));
   let files = [];
   try {
